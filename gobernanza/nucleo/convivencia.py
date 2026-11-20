@@ -18,6 +18,7 @@ PIN = "0e3f6308a67fdb21d45fa0570975029fab2d9380"
 CONFIG = "gobernanza/config.json"
 TAXONOMIA = "gobernanza/taxonomy/projects/"
 RAICES = {"G": "gobernanza/sesiones", "S": "sesiones"}
+LANZADOR_RAIZ = "gobernanza-kit"
 FOLIO = r"[GS][0-9]{2}-[0-9]{2}"
 FICHA = r"F-[0-9]{4}"
 OID = r"(?:[a-f0-9]{40}|[a-f0-9]{64})"
@@ -100,6 +101,8 @@ def contratos_en(texto, ruta):
 
 def _en_ruta_dominio(ruta, dominio, raices_solucion):
     origen = ruta.split("/", 1)[0]
+    if origen == LANZADOR_RAIZ:
+        return dominio == "G" and ruta == LANZADOR_RAIZ
     if dominio == "G":
         return origen in {"gobernanza", ".codex", ".claude", ".githooks", "AGENTS.md", ".gitignore"}
     return origen in {"sdd", "sesiones", *raices_solucion}
@@ -111,6 +114,8 @@ def _patron(texto, dominio, raices_solucion, ruta):
         _ruta(limpio)
     except ErrorArbol as exc:
         raise ErrorConvivencia(str(exc), ruta) from exc
+    if limpio == LANZADOR_RAIZ and texto.endswith("/"):
+        raise ErrorConvivencia(f"El lanzador de raíz debe declararse como archivo: {texto}.", ruta)
     if not _en_ruta_dominio(limpio, dominio, raices_solucion):
         # El pin contempla estas zonas para operación local G; los lotes
         # versionables siguen exigiendo dominio y nunca las reciben.
@@ -293,7 +298,7 @@ class RepositorioNativo:
         raices_solucion = self.taxonomia.get("solution_roots", ["solucion"])
         if (not isinstance(raices_solucion, list)
                 or any(not isinstance(r, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", r)
-                       or r in {"gobernanza", "sdd", "sesiones"} for r in raices_solucion)):
+                       or r in {"gobernanza", "sdd", "sesiones", LANZADOR_RAIZ} for r in raices_solucion)):
             raise ErrorConvivencia("Raíces de solución del perfil incompatibles.", self.ruta_perfil)
         self.raices_solucion = {"solucion", *raices_solucion}
 
