@@ -93,11 +93,15 @@ def _funcionalidades(valores):
     return sorted(set(valores))
 
 
-def _autoridad(datos, prosa, sesion):
+def _autoridad(datos, prosa, sesion, *, reanudacion=False):
     if datos.get("schema") == 3:
         if datos.get("tipo") != "sesion" or datos.get("ref") != sesion:
             raise ErrorAcuerdo("La sesión SDD no coincide con el acuerdo requerido.")
-        if datos.get("estado") not in {"preparacion", "ejecucion", "pendiente_humana", "lista"}:
+        estado = datos.get("estado")
+        estados = {"preparacion", "ejecucion", "pendiente_humana", "lista"}
+        if reanudacion:
+            estados.update({"pausada", "bloqueada"})
+        if estado not in estados:
             raise ErrorAcuerdo("La fase SDD no habilita el trabajo sobre esta sesión.")
         datos = dict(schema=1, id=sesion, plan=datos.get("plan"), acuerdo=datos.get("mandato"),
                      ejecucion_autorizada=True, funcionalidades=datos.get("funcionalidades"))
@@ -162,7 +166,7 @@ def _autoridad(datos, prosa, sesion):
     return autoridad
 
 
-def _localizar(raiz, sesion):
+def _localizar(raiz, sesion, *, reanudacion=False):
     raiz = Path(raiz)
     repo = _repo(raiz)
     candidatos = []
@@ -173,7 +177,7 @@ def _localizar(raiz, sesion):
     canonica = f"sdd/registro/{sesion}.md"
     if not candidatos and canonica in repo.rutas(["sdd/registro/*.md"]):
         datos, prosa = _frontmatter(raiz / canonica)
-        candidatos.append((canonica, _autoridad(datos, prosa, sesion)))
+        candidatos.append((canonica, _autoridad(datos, prosa, sesion, reanudacion=reanudacion)))
     if repo.errores:
         raise ErrorAcuerdo("Las rutas documentales no son seguras.")
     if len(candidatos) != 1:
@@ -181,13 +185,13 @@ def _localizar(raiz, sesion):
     return candidatos[0]
 
 
-def normalizar_autoridad(raiz_materializada, sesion):
+def normalizar_autoridad(raiz_materializada, sesion, *, reanudacion=False):
     """Proyecta autoridad sin Git para adaptadores que ya poseen una instantánea."""
-    ruta, datos = _localizar(raiz_materializada, sesion)
+    ruta, datos = _localizar(raiz_materializada, sesion, reanudacion=reanudacion)
     return dict(ruta_sesion=ruta, datos=datos, huella_acuerdo=_hash(datos))
 
 
-def _capturar(raiz, sesion, ref_acuerdo, base):
+def _capturar(raiz, sesion, ref_acuerdo, base, *, reanudacion=False):
     ref_acuerdo = _commit(raiz, ref_acuerdo)
     base = _commit(raiz, ref_acuerdo if base is None else base)
     try:
@@ -195,7 +199,7 @@ def _capturar(raiz, sesion, ref_acuerdo, base):
     except ErrorAcuerdo as exc:
         raise ErrorAcuerdo("La base de diferencias debe ser antecesora del acuerdo.") from exc
     with _materializar(raiz, ref_acuerdo) as arbol:
-        autoridad = normalizar_autoridad(arbol.raiz, sesion)
+        autoridad = normalizar_autoridad(arbol.raiz, sesion, reanudacion=reanudacion)
     for campo in ("base_ejecucion", "base"):
         if campo in autoridad["datos"] and _commit(raiz, autoridad["datos"][campo]) != base:
             raise ErrorAcuerdo(f"La base de captura no coincide con {campo} del acuerdo fuente; pasa explícitamente esa base.")
@@ -249,7 +253,7 @@ def _obligaciones(arbol):
     return huella_obligaciones_materializadas(arbol.raiz)
 
 
-def huella_obligaciones_materializadas(raiz_materializada):
+def huella_obligaciones_materializadas(raiz_materializada, *, reanudar_sesion=None):
     """Calcula entradas sobre la copia recibida; nunca vuelve al checkout origen.
 
     Se enumeran exclusivamente documentos, pruebas y controles declarados. Los
@@ -276,9 +280,13 @@ def huella_obligaciones_materializadas(raiz_materializada):
             raise ErrorAcuerdo(f"No se puede leer la obligación {ruta}: {exc}") from exc
         if _coincide(ruta, [*config["documentos"], "sdd/registro/*.md"]):
             datos, prosa = _frontmatter(archivo)
-            if (datos.get("schema") == 3 and datos.get("tipo") == "sesion"
-                    and datos.get("mandato") and datos.get("estado") in {"preparacion", "ejecucion", "pendiente_humana", "lista"}):
-                huella = _hash(_autoridad(datos, prosa, datos["ref"]))
+            if datos.get("schema") == 3 and datos.get("tipo") == "sesion" and datos.get("mandato"):
+                reanudacion = datos["ref"] == reanudar_sesion
+                vigentes = {"preparacion", "ejecucion", "pendiente_humana", "lista"}
+                if reanudacion:
+                    vigentes.update({"pausada", "bloqueada"})
+                if datos.get("estado") in vigentes:
+                    huella = _hash(_autoridad(datos, prosa, datos["ref"], reanudacion=reanudacion))
             identidad = datos.get("id", "")
             if isinstance(identidad, str) and re.fullmatch(r"[SG]\d{2}-\d{2}", identidad) and "acuerdo" in datos:
                 huella = _hash(_autoridad(datos, prosa, identidad))
@@ -406,6 +414,13 @@ def _destinos_pruebas(arbol, patrones):
     return destinos
 
 
+def exige_ruta_desarrollo(*configuraciones):
+    valores = [config.get("ruta_desarrollo_requerida", False) for config in configuraciones]
+    if any(type(valor) is not bool for valor in valores):
+        raise ErrorAcuerdo("ruta_desarrollo_requerida debe ser un booleano en la configuración del proyecto.")
+    return any(valores)
+
+
 def validar_cambios(raiz, sesion, acuerdo, *, arbol="worktree", fase="preparacion", preparacion=None, dictamenes=()):
     """Diagnostica cambios de un árbol materializado contra un acuerdo capturado."""
     errores, cambios = [], []
@@ -435,6 +450,7 @@ def validar_cambios(raiz, sesion, acuerdo, *, arbol="worktree", fase="preparacio
             config = _repo(fuente.raiz).config
             config_base = _repo(base.raiz).config
             config_destino = _repo(destino.raiz).config
+            datos = {}
             try:
                 datos, prosa = _frontmatter(destino.raiz / acuerdo["ruta_sesion"])
                 if _autoridad(datos, prosa, sesion) != acuerdo["datos"]:
@@ -452,6 +468,9 @@ def validar_cambios(raiz, sesion, acuerdo, *, arbol="worktree", fase="preparacio
             controles = alcance["controles"] + config["raices"]["controles"] + config_base["raices"]["controles"]
             producto = alcance["producto"] + config["raices"]["solucion"] + config_base["raices"]["solucion"]
             requiere_producto = False
+            requiere_entrada_ruta = False
+            excluir_ruta = [patron for cfg in (config, config_base)
+                            for clase in ("pruebas", "controles") for patron in cfg["raices"][clase]]
             seleccion_anterior = {k: config_base.get(k) for k in ("verificadores",)}
             seleccion_actual = {k: config_destino.get(k) for k in ("verificadores",)}
             seleccion_anterior["pruebas"] = config_base["raices"]["pruebas"]
@@ -470,8 +489,11 @@ def validar_cambios(raiz, sesion, acuerdo, *, arbol="worktree", fase="preparacio
                 es_control = _coincide(ruta, controles)
                 if es_control and not sesion.startswith("G"):
                     error("CONTROL_SIN_SESION_G", ruta, "Los controles requieren una sesión de gobernanza.")
-                if _coincide(ruta, producto) and not _coincide(ruta, pruebas_autorizadas) and not es_control and ruta not in scaffold:
-                    requiere_producto = True
+                if _coincide(ruta, producto) and ruta not in scaffold:
+                    if not _coincide(ruta, excluir_ruta):
+                        requiere_entrada_ruta = True
+                    if not _coincide(ruta, pruebas_autorizadas) and not es_control:
+                        requiere_producto = True
                 sensible = bool(anterior and es_prueba)
                 if sensible and nuevo and ruta.endswith(".py") and anterior["modo"] == nuevo["modo"]:
                     sensible = not _adicion_pura((base.raiz / ruta).read_text(encoding="utf-8"), (destino.raiz / ruta).read_text(encoding="utf-8"))
@@ -488,6 +510,11 @@ def validar_cambios(raiz, sesion, acuerdo, *, arbol="worktree", fase="preparacio
                         or preparacion.get("huella_obligaciones") != obligaciones):
                     error("PREPARACION_NO_VIGENTE", ".", "Falta evidencia de preparación satisfecha para este acuerdo y estas obligaciones.",
                           "Preparación real ligada al contenido", "Ejecuta los verificadores de preparación y conserva su evidencia vigente.")
+            if requiere_entrada_ruta and datos.get("schema") == 3 and exige_ruta_desarrollo(config, config_destino):
+                estados = {"ejecucion", "pendiente_humana", "lista"} if fase == "entrega" else {"ejecucion"}
+                if fase == "preparacion" or datos.get("estado") not in estados:
+                    error("PRODUCTO_SIN_ENTRADA", acuerdo["ruta_sesion"],
+                          "El trabajo de producto requiere la fase ejecución registrada en el SDD.")
     except (ValueError, OSError, TypeError, KeyError) as exc:
         error("ACUERDO_INVALIDO", ".", str(exc))
     salida = resultado("validar_cambios", errores)

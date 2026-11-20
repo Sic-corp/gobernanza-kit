@@ -6,7 +6,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 
-from .acuerdos import _capturar, _salidas
+from .acuerdos import _cambios_fuente, _capturar, _salidas, _zonas_solapadas, exige_ruta_desarrollo
 from .arboles import ErrorArbol, LectorArbol, _git
 from .inicio import guardar_documentos
 from .modelo import coincide, diagnostico, resultado
@@ -260,7 +260,7 @@ def _permite(permisos, cambio):
     return True
 
 
-def _autorizar(base, sesion, cambios, enlaces):
+def _autorizar(base, sesion, cambios, enlaces, *, reanudacion=False):
     exigidos = [cambio for cambio in cambios if cambio["accion"] in {"transicion", "migrar"}
                 or (cambio["accion"] == "modificar" and cambio["estado_anterior"] != "borrador"
                     and re.fullmatch(_FOLIO, cambio["ref"]))]
@@ -277,7 +277,10 @@ def _autorizar(base, sesion, cambios, enlaces):
         _antecesor(base, fuente)
         if capturado != _capturar(base.raiz, sesion, fuente, capturado["base"]):
             raise ValueError("El acuerdo guardado no coincide con el compromiso de origen.")
-        actual = _capturar(base.raiz, sesion, base.commit, capturado["base"])
+        if reanudacion:
+            actual = _capturar(base.raiz, sesion, base.commit, capturado["base"], reanudacion=True)
+        else:
+            actual = _capturar(base.raiz, sesion, base.commit, capturado["base"])
         if (actual["ruta_sesion"], actual["huella_acuerdo"]) != (capturado["ruta_sesion"], capturado["huella_acuerdo"]):
             raise ValueError("La autoridad de la sesión cambió después del inicio.")
         ruta_sesion = actual["ruta_sesion"]
@@ -291,7 +294,10 @@ def _autorizar(base, sesion, cambios, enlaces):
             datos, _ = _frontal_v2(base, ruta_sesion)
             if datos.get("schema") != 1 or datos.get("inicio") != {"registro": ruta, "ref_acuerdo": fuente}:
                 raise ValueError("La sesión no enlaza su acuerdo guardado exacto.")
-        if datos.get("estado") not in {"preparacion", "ejecucion", "pendiente_humana"}:
+        estados = {"preparacion", "ejecucion", "pendiente_humana"}
+        if reanudacion and ruta_sesion == _ruta(sesion):
+            estados.update({"pausada", "bloqueada"})
+        if datos.get("estado") not in estados:
             raise ValueError("La sesión del acuerdo debe estar activa.")
         acuerdo = capturado["datos"]["acuerdo"]
     except (KeyError, TypeError, ValueError) as exc:
@@ -347,13 +353,65 @@ def _aprobar_arranque(base, aprobacion, cambios, documentos, enlaces):
     return dict(aprobacion, sesion=ref, sha256=_sha(imagen), sha256_borrador=cambio["antes"], referencia_dueno=pedido)
 
 
+def _cotejar_destinos_ruta(base, destinos):
+    from .ruta_desarrollo import RUTA, leer_ruta, validar_destinos
+
+    entrada = base.entrada(RUTA)
+    if entrada is None or entrada[0] != "100644":
+        raise ErrorRegistro(RUTA, "Guarda la hoja de ruta del proyecto como archivo Markdown regular.",
+                            "DESTINO_RUTA")
+    if not destinos:
+        raise ErrorRegistro(RUTA, "La ejecución de producto requiere un destino de la ruta de desarrollo.",
+                            "DESTINO_RUTA")
+    try:
+        return validar_destinos(leer_ruta(entrada[1].decode("utf-8")), destinos)
+    except (ValueError, TypeError) as exc:
+        raise ErrorRegistro(RUTA, str(exc), "DESTINO_RUTA") from exc
+
+
+def _exigir_destino_de_producto(base, datos):
+    ruta_config = "gobernanza/config.json"
+    actual = _objeto(base.leer(ruta_config), ruta_config)
+    ref = datos["ref"]
+    ruta_acuerdo = f"sesiones/estado/{ref}/acuerdo.json"
+    entrada = base.entrada(ruta_acuerdo)
+    captura = _objeto(entrada[1], ruta_acuerdo) if entrada is not None else None
+    fuente = actual
+    if captura is not None:
+        ref_acuerdo = captura["ref_acuerdo"]
+        _antecesor(base, ref_acuerdo)
+        fuente = _objeto(LectorArbol(base.raiz, ref_acuerdo).leer(ruta_config), ruta_config)
+    if not exige_ruta_desarrollo(actual, fuente):
+        return
+
+    mandato = datos["mandato"]
+    alcance = mandato["alcance"]
+    raices = (actual["raices"], fuente["raices"])
+    excluidas = [patron for grupo in raices for clase in ("pruebas", "controles") for patron in grupo[clase]]
+    solucion = [patron for grupo in raices for patron in grupo["solucion"]]
+    otros_destinos = [ruta for clase, rutas in alcance.items() if clase != "producto" for ruta in rutas]
+
+    def producto(ruta):
+        return ruta not in mandato["scaffold"] and not any(coincide(ruta, patron) for patron in excluidas)
+
+    previsto = (any(producto(ruta) for ruta in alcance["producto"])
+                or any(producto(ruta) and any(_zonas_solapadas(ruta, patron) for patron in solucion)
+                       for ruta in otros_destinos))
+    if not previsto and captura is not None:
+        cambios = _cambios_fuente(LectorArbol(base.raiz, captura["base"]), base)
+        previsto = any(producto(ruta) and any(coincide(ruta, patron) for patron in solucion) for ruta in cambios)
+    if previsto:
+        _cotejar_destinos_ruta(base, datos.get("destinos_ruta"))
+
+
 def _plan(base, operacion):
     ref_base, sesion, cambios, aprobacion = _operacion(operacion)
     if base.commit != ref_base:
         raise ErrorRegistro(REGISTRO, "La base declarada no coincide con el árbol de la operación.")
     documentos = _documentos(base)
     imagenes, declarados, errores = {}, [], []
-    borradores, enlaces, fases = [], [], []
+    borradores, enlaces, fases, destinos = [], [], [], []
+    reanudar_autoridad = False
     for cambio in cambios:
         accion, datos, texto, ruta = _cambio(cambio)
         if ruta in imagenes:
@@ -372,11 +430,20 @@ def _plan(base, operacion):
                 borradores.append(({}, datos))
             elif accion == "modificar":
                 enlaces.append((anteriores, datos))
+                if anteriores.get("destinos_ruta") != datos.get("destinos_ruta"):
+                    if "destinos_ruta" in datos:
+                        destinos.append(datos["destinos_ruta"])
+                    reanudar_autoridad = (len(cambios) == 1 and ref == sesion
+                                          and anteriores.get("estado") in {"pausada", "bloqueada"}
+                                          and {k: v for k, v in datos.items() if k != "destinos_ruta"}
+                                          == {k: v for k, v in anteriores.items() if k != "destinos_ruta"})
             elif accion == "transicion":
                 if anteriores.get("estado") == "borrador" and datos.get("estado") == "preparacion":
                     enlaces.append(({}, datos))
                 if datos.get("mandato") and datos.get("estado") in {"ejecucion", "pendiente_humana", "lista"}:
-                    fases.append(datos)
+                    reanudar = datos["estado"] == "ejecucion" and anteriores.get("estado") in {"pausada", "bloqueada"}
+                    reanudar_autoridad = reanudar and len(cambios) == 1 and ref == sesion
+                    fases.append((datos, reanudar))
         antes = _sha(base.leer(ruta)) if anterior is not None else None
         despues = _sha(imagen)
         if antes == despues:
@@ -393,14 +460,18 @@ def _plan(base, operacion):
     _cotejar_enlaces_sesion(base, borradores)
     acuerdo, decision = None, None
     if aprobacion is None:
-        acuerdo = _autorizar(base, sesion, declarados, enlaces)
+        acuerdo = _autorizar(base, sesion, declarados, enlaces, reanudacion=reanudar_autoridad)
     else:
         decision = _aprobar_arranque(base, aprobacion, declarados, documentos, enlaces)
+    for vinculados in destinos:
+        _cotejar_destinos_ruta(base, vinculados)
     if fases:
         from .flujo_sdd import comprobar_fase
 
-        for datos in fases:
-            errores.extend(comprobar_fase(base.raiz, base.commit, datos))
+        for datos, reanudar in fases:
+            if datos["estado"] == "ejecucion":
+                _exigir_destino_de_producto(base, datos)
+            errores.extend(comprobar_fase(base.raiz, base.commit, datos, reanudacion=reanudar))
         if errores:
             return errores, None, None
 
@@ -647,3 +718,57 @@ def registrar(raiz, operacion, *, aplicar=False):
     except (KeyError, TypeError, ValueError, OSError) as exc:
         salida.update(resultado("registrar", [_diagnostico(exc)]))
         return salida
+
+
+def _reintento_vinculo(cabeza, ruta, destinos, base):
+    _cotejar_destinos_ruta(cabeza, destinos)
+    operaciones = listar_operaciones(cabeza.raiz, cabeza.commit)
+    for operacion in reversed(operaciones):
+        cambio = next((c for c in operacion["cambios"] if c["ruta"] == ruta), None)
+        if cambio is None or (base not in (None, cabeza.commit, operacion["base"])):
+            continue
+        posterior = LectorArbol(cabeza.raiz, operacion["commit"])
+        datos, _ = leer(posterior.leer(ruta).decode("utf-8"))
+        if datos.get("destinos_ruta") != destinos:
+            continue
+        if cambio["antes"] is not None:
+            anterior = LectorArbol(cabeza.raiz, operacion["base"])
+            datos, _ = leer(anterior.leer(ruta).decode("utf-8"))
+            if datos.get("destinos_ruta") == destinos:
+                continue
+        if _git(cabeza.raiz, "rev-parse", "HEAD").decode("ascii").strip() != cabeza.commit:
+            raise ErrorRegistro(ruta, "HEAD cambió mientras se cotejaba el vínculo.", "DESTINO_RUTA_BASE")
+        salida = resultado("vincular-ruta")
+        salida.update(cambios=operacion["cambios"], commit=operacion["commit"], idempotente=True,
+                      recibo={k: v for k, v in operacion.items() if k != "commit"},
+                      resumen="El vínculo ya está registrado y su destino sigue vigente.")
+        return salida
+    raise ErrorRegistro(ruta, "No hay una constancia del vínculo para la base indicada.", "DESTINO_RUTA_BASE")
+
+
+def vincular_ruta(raiz, sesion, destinos, *, base=None, aplicar=False):
+    """Simula o registra destinos sin modificar el acuerdo de una sesión SDD."""
+    try:
+        if not isinstance(sesion, str) or not re.fullmatch(_FOLIO, sesion):
+            raise ErrorRegistro(REGISTRO, f"Folio de sesión inválido: {sesion!r}.", "DESTINO_RUTA")
+        if base is not None and (not isinstance(base, str) or not re.fullmatch(_OID, base)):
+            raise ErrorRegistro(REGISTRO, "Indica el SHA completo de la base del vínculo.", "DESTINO_RUTA_BASE")
+        cabeza = LectorArbol(raiz, "HEAD")
+        ruta = _ruta(sesion)
+        if cabeza.entrada(ruta) is None:
+            raise ErrorRegistro(ruta, f"No existe la sesión SDD {sesion}.", "DESTINO_RUTA")
+        datos, texto = leer(cabeza.leer(ruta).decode("utf-8"))
+        if "destinos_ruta" in datos and datos["destinos_ruta"] == destinos:
+            return _reintento_vinculo(cabeza, ruta, destinos, base)
+        if base not in (None, cabeza.commit):
+            raise ErrorRegistro(ruta, "La base del vínculo ya no es HEAD.", "DESTINO_RUTA_BASE")
+        if datos["estado"] == "borrador":
+            _cotejar_destinos_ruta(cabeza, destinos)
+        lote = {"base": cabeza.commit, "cambios": [
+            {"accion": "modificar", "datos": dict(datos, destinos_ruta=destinos), "texto": texto},
+        ]}
+        if datos["estado"] != "borrador":
+            lote["sesion"] = sesion
+        return dict(registrar(raiz, lote, aplicar=aplicar), operacion="vincular-ruta")
+    except (ValueError, TypeError, KeyError, OSError) as exc:
+        return resultado("vincular-ruta", [_diagnostico(exc)])

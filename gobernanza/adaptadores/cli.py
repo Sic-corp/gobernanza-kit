@@ -2,9 +2,13 @@
 
 import argparse
 import json
+import os
+import re
+import stat
 from pathlib import Path
 import sys
 
+from . import ruta
 from ..nucleo.acuerdos import capturar_acuerdo, validar_cambios
 from ..nucleo.arboles import materializar
 from ..nucleo.cierre import confirmar_cierre, evaluar_entrega, preparar_cierre
@@ -15,6 +19,7 @@ from ..nucleo.inicio import conciliar_guardado, iniciar, leer_inicio, planificar
 from ..nucleo.validacion import validar
 from ..nucleo.verificacion import verificar
 from ..nucleo.modelo import diagnostico, referencia, resultado
+from ..nucleo.servicio_sdd import solicitar_sdd
 
 
 class UsoInvalido(ValueError):
@@ -95,13 +100,19 @@ def _parser():
     sdd = verbos.add_parser("sdd", help="Registrar y consultar contratos tipados")
     _comunes(sdd)
     operaciones = sdd.add_subparsers(dest="accion_sdd", required=True)
-    for nombre in ("registrar", "migrar", "indice", "seccion", "traza"):
+    for nombre in ("registrar", "migrar", "indice", "seccion", "traza", "estado", "servir", "aceptar-candidato"):
         op = operaciones.add_parser(nombre)
         _comunes(op)
         if nombre in {"registrar", "migrar"}:
             op.add_argument("--aplicar", action="store_true", help="Guardar el lote simulado")
-        else:
+        if nombre in {"indice", "seccion", "traza"}:
             op.add_argument("--arbol", default="worktree")
+        if nombre in {"registrar", "estado", "indice"}:
+            op.add_argument("--socket", type=Path, help="Socket del escritor local de SDD")
+        if nombre in {"servir", "aceptar-candidato"}:
+            op.add_argument("--config", required=True, type=Path, help="Configuración privada del escritor")
+        if nombre == "aceptar-candidato":
+            op.add_argument("--candidato", required=True, help="SHA completo importado al repositorio de autoridad")
         if nombre == "registrar":
             op.add_argument("--entrada", required=True, help="Archivo JSON con el lote de cambios")
         if nombre == "migrar":
@@ -116,6 +127,7 @@ def _parser():
             modo = op.add_mutually_exclusive_group()
             modo.add_argument("--comprobar", action="store_true")
             modo.add_argument("--escribir", action="store_true")
+    ruta.opciones(verbos, _comunes)
     return parser
 
 
@@ -158,8 +170,33 @@ def _sdd(raiz, args):
     from ..nucleo.registro_sdd import registrar
 
     accion = args.accion_sdd
+    if accion in {"servir", "aceptar-candidato"}:
+        if accion == "aceptar-candidato" and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", args.candidato) is None:
+            raise UsoInvalido("El candidato requiere un SHA Git completo y literal.")
+        return _administrar_sdd(args)
+    socket = getattr(args, "socket", None) or os.environ.get("GOBERNANZA_SDD_SOCKET")
+    if accion == "estado":
+        return _solicitud_sdd(raiz, socket, "estado")
     if accion == "registrar":
-        return registrar(raiz, _leer(raiz, args.entrada), aplicar=args.aplicar)
+        lote = _leer(raiz, args.entrada)
+        if socket or "generacion" in lote:
+            return _solicitud_sdd(raiz, socket, "registrar", aplicar=args.aplicar, lote=lote)
+        return registrar(raiz, lote, aplicar=args.aplicar)
+    if accion == "indice" and socket:
+        if args.arbol != "worktree":
+            raise UsoInvalido("El escritor opera solamente sobre el worktree registrado.")
+        estado = _solicitud_sdd(raiz, socket, "estado")
+        if estado["codigo"]:
+            return estado
+        lote = {"base": estado["base"], "generacion": estado["generacion"],
+                "cambios": [{"accion": "indice"}]}
+        salida = _solicitud_sdd(raiz, socket, "registrar", aplicar=args.escribir, lote=lote)
+        if args.comprobar and not salida["codigo"] and salida["cambios"]:
+            return resultado("indice", [diagnostico(
+                "SDD_INDICE_DESACTUALIZADO", "sdd/INDICE.md", "Índice nativo vigente",
+                "La proyección del índice ha cambiado.", "Regenera el índice mediante sdd indice --escribir."
+            )])
+        return salida
     if accion == "migrar":
         plan = plan_migracion(raiz, args.base, _leer(raiz, args.asignaciones), sesion=args.sesion)
         if plan["codigo"] or not args.aplicar:
@@ -172,8 +209,95 @@ def _sdd(raiz, args):
     return generar_indice(raiz, comprobar=args.comprobar, escribir=args.escribir, arbol=args.arbol)
 
 
+def _solicitud_sdd(raiz, socket, operacion, **datos):
+    if not socket:
+        raise UsoInvalido("Indica --socket o GOBERNANZA_SDD_SOCKET para contactar al escritor de SDD.")
+    try:
+        respuesta = solicitar_sdd(Path(socket), dict(datos, operacion=operacion, raiz=str(raiz)))
+        if not isinstance(respuesta, dict) or type(respuesta.get("codigo")) is not int:
+            raise ValueError("Respuesta inválida del escritor de SDD.")
+    except (OSError, ValueError) as exc:
+        respuesta = {"codigo": 1, "resumen": str(exc)}
+    errores = []
+    if respuesta["codigo"]:
+        errores.append(diagnostico(
+            "SDD_SERVICIO", str(socket), "Operación válida del escritor de SDD",
+            respuesta.get("resumen", "Solicitud rechazada."), "Corrige el diagnóstico y vuelve a solicitar la operación."
+        ))
+    salida = resultado(operacion, errores, codigo=respuesta["codigo"])
+    for campo in ("resumen", "raiz", "base", "generacion", "archivos", "cambios", "recibo", "idempotente"):
+        if campo in respuesta:
+            salida[campo] = respuesta[campo]
+    return salida
+
+
+def _administrar_sdd(args):
+    from ..nucleo.proteccion_sdd import (
+        aceptar_candidato_sdd, capturar_imagen_sdd, verificar_almacen_sdd,
+        verificar_autoridad_git, verificar_permisos_sdd,
+    )
+    from ..nucleo.sdd_heimdall import planificar_heimdall
+    from ..nucleo.servicio_sdd import ConfiguracionSDD, ServicioSDD
+
+    ruta = args.config
+    datos_archivo = ruta.lstat()
+    if (not ruta.is_absolute() or ruta != ruta.resolve(strict=True)
+            or not stat.S_ISREG(datos_archivo.st_mode) or datos_archivo.st_uid != os.geteuid()
+            or datos_archivo.st_mode & 0o077):
+        raise ValueError("La configuración debe ser un archivo privado absoluto del escritor.")
+    datos = _leer(ruta.parent, ruta)
+    campos = {"raiz", "estado", "socket", "uid_agente", "gid_agente", "base", "alcance",
+              "referencia", "repositorio_git"}
+    if datos.keys() != campos or not isinstance(datos["alcance"], list):
+        raise ValueError("Configuración inválida del escritor de SDD.")
+    config = ConfiguracionSDD(
+        raiz=Path(datos["raiz"]), estado=Path(datos["estado"]), socket=Path(datos["socket"]),
+        uid_agente=datos["uid_agente"], gid_agente=datos["gid_agente"], base=datos["base"],
+        alcance=tuple(datos["alcance"]), referencia=Path(datos["referencia"]),
+    )
+    if ruta.is_relative_to(config.raiz):
+        raise ValueError("La configuración debe vivir fuera del checkout del agente.")
+
+    verificar_almacen_sdd(ruta, uid_agente=config.uid_agente, privado=True)
+    repositorio = Path(datos["repositorio_git"])
+    verificar_autoridad_git(repositorio, raiz_agente=config.raiz, uid_agente=config.uid_agente)
+
+    def comprobar(raiz, uid_agente):
+        verificar_permisos_sdd(raiz, uid_agente=uid_agente)
+        for almacen in (ruta, config.estado, config.referencia.parent):
+            verificar_almacen_sdd(almacen, uid_agente=uid_agente, privado=True)
+        for almacen in (config.referencia, config.socket.parent):
+            verificar_almacen_sdd(almacen, uid_agente=uid_agente, privado=False)
+
+    imagen_base = capturar_imagen_sdd(repositorio, config.base)
+    servicio = ServicioSDD(
+        config, planificar_heimdall, comprobar_proteccion=comprobar, imagen_base=imagen_base
+    )
+    if args.accion_sdd == "servir":
+        servicio.servir()
+        return resultado("servir")
+
+    def aceptar(imagen):
+        verificar_autoridad_git(repositorio, raiz_agente=config.raiz, uid_agente=config.uid_agente)
+        with materializar(repositorio, args.candidato) as candidato:
+            if planificar_heimdall(candidato.raiz, [{"accion": "indice"}],
+                                   autorizar=lambda *_: None):
+                raise ValueError("El índice de SDD está desactualizado para las fuentes del candidato.")
+        return aceptar_candidato_sdd(repositorio, args.candidato, imagen, base=config.base)
+
+    return dict(resultado("aceptar-candidato"), commit=servicio.con_imagen_vigente(aceptar))
+
+
 def _despachar(args):
     raiz = Path(getattr(args, "raiz", ".")).resolve()
+    if args.verbo == "ruta":
+        return ruta.despachar(raiz, args, _leer)
+    if args.verbo == "tablero":
+        from ..tablero.__main__ import main as abrir
+        opciones = ["--raiz", str(raiz), "--puerto", str(args.puerto)]
+        if args.sin_abrir:
+            opciones.append("--sin-abrir")
+        return dict(resultado("tablero", codigo=abrir(opciones)), _ayuda=True)
     if args.verbo == "sdd":
         return _sdd(raiz, args)
     if args.verbo == "contexto":
@@ -189,6 +313,7 @@ def _despachar(args):
     if repo is not None:
         return _despachar_nativo(repo, args)
     if args.verbo == "iniciar":
+        ruta.completar_raices_de_inicio(raiz, args.base)
         return iniciar(raiz, args.sesion, base=args.base)
     if args.verbo == "validar":
         if args.modo != "borrador" and not args.sesion:
@@ -307,7 +432,7 @@ def _validar_nativo_cli(repo, args, entrada, preparacion, dictamenes):
 
 def ejecutar(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    operacion = next((v for v in argv if v in {"contexto", "validar", "iniciar", "verificar", "cerrar", "sdd"}), "cli")
+    operacion = next((v for v in argv if v in {"contexto", "validar", "iniciar", "verificar", "cerrar", "sdd", "ruta", "tablero"}), "cli")
     try:
         args = _parser().parse_args(argv)
         return _despachar(args)

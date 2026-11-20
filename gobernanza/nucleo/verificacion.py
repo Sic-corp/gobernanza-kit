@@ -34,7 +34,7 @@ def _motor():
                   for p in sorted(Path(__file__).parent.glob("*.py"))})
 
 
-def _entradas(arbol, sesion):
+def _entradas(arbol, sesion, *, reanudacion=False):
     repo = cargar(arbol.raiz)
     if repo.errores:
         raise ValueError(json.dumps(repo.errores, ensure_ascii=False))
@@ -48,7 +48,7 @@ def _entradas(arbol, sesion):
         if repo.segura(salida) is None:
             raise ValueError("Salida fuera de la raíz declarada.")
     entradas = {}
-    autoridad = normalizar_autoridad(arbol.raiz, sesion)
+    autoridad = normalizar_autoridad(arbol.raiz, sesion, reanudacion=reanudacion)
     for ruta, meta in arbol.archivos.items():
         necesaria = ruta in {"gobernanza/config.json", "sdd/proyecto.md"} or any(
             coincide(ruta, p) for p in raices + documentos)

@@ -97,6 +97,11 @@ def _lista(valores, acepta, *, obligatoria):
             and all(acepta(valor) for valor in valores) and len(set(valores)) == len(valores))
 
 
+def _destinos_ruta(valores):
+    return (_lista(valores, lambda valor: _forma(valor, r"(?:META|OBJ)-[0-9]*[1-9][0-9]*"), obligatoria=True)
+            and (len(valores) == 1 or all(valor.startswith("OBJ-") for valor in valores)))
+
+
 def _cita(valor):
     if not isinstance(valor, str):
         return False
@@ -175,6 +180,8 @@ def _mandato(ref, datos):
     pedido = mandato.get("referencia_pedido")
     if not isinstance(pedido, str) or not pedido.strip():
         errores.append(error("mandato.referencia_pedido", "Se requiere referencia al pedido del dueño."))
+    if "mantenimiento_fuera_de_ruta" in mandato and not _cadena(mandato["mantenimiento_fuera_de_ruta"]):
+        errores.append(error("mandato.mantenimiento_fuera_de_ruta", "La justificación debe ser texto no vacío."))
     funcionalidades = mandato.get("funcionalidades")
     del_plan = datos.get("funcionalidades", [])
     acepta = lambda valor: _referencia(valor, "funcionalidad")
@@ -237,7 +244,8 @@ def _campos(ref, documento):
         simples.update(plan=lambda valor: type(valor) is int and valor > 0, acuerdo=_ruta,
                        origen=lambda valor: _referencia(valor, "sesion"),
                        resultados_humanos=lambda valor: _registros(valor, _resultado_humano),
-                       deuda_asignada=lambda valor: _registros(valor, _deuda_asignada))
+                       deuda_asignada=lambda valor: _registros(valor, _deuda_asignada),
+                       destinos_ruta=_destinos_ruta)
     admitidos = {"schema", "tipo", "ref", "estado"} | exigibles.keys() | opcionales.keys() | simples.keys()
     tiene_mandato = tipo == "sesion" and "mandato" in datos
     if tiene_mandato:
@@ -411,6 +419,10 @@ def validar_edicion(anterior, nuevo, accion):
         if datos["tipo"] in {"spec", "funcionalidad"} and estado != "borrador":
             return [_error(ref, "CONTRATO_SDD", "El contrato publicado requiere una versión o revisión nueva.")]
         if datos["tipo"] == "sesion" and estado != "borrador":
+            if (datos.get("destinos_ruta") != previos.get("destinos_ruta")
+                    and estado not in {"preparacion", "pausada", "bloqueada"}):
+                return [_error(ref, "DESTINO_RUTA", "El vínculo de ruta está fijo durante la ejecución y el cierre.",
+                               campo="destinos_ruta")]
             campos = [campo for campo in ("mandato", "plan", "funcionalidades")
                       if datos.get(campo) != previos.get(campo)]
             if texto != prosa_anterior:

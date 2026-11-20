@@ -7,6 +7,9 @@ reconstruir la traza de un cambio desde el historial del proyecto.
 
 ## Instalar o actualizar
 
+Si el proyecto ya tiene código, pruebas o ramas abiertas, sigue la
+[guía de adopción en un repositorio existente](docs/kit-local/FORMATO_DISTRIBUCION.md#adoptar-el-kit-en-un-repositorio-existente).
+
 Requiere Git, Python 3.10 o posterior y un entorno POSIX. Ejecuta desde la raíz
 Git del proyecto consumidor. En Bash o Zsh, `pipefail` hace que el bloque
 devuelva un error si falla `curl`.

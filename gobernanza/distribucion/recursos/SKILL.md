@@ -140,3 +140,15 @@ interrumpió una instalación antes de publicar el administrador, la entrada
 `entradas/gestionar.py` del slot conservado también permite recuperar. La guía
 explica los comandos. Reinicia procesos Python al cambiar de versión; no hay
 recarga implícita ni garantía de detección desde un módulo antiguo aún cargado.
+
+
+## Planificar y vincular la ejecución
+
+Cuando el dueño indique un fin de producto, consulta `ruta consultar --json` con
+la entrada del proyecto. Para registrar un nuevo resultado usa `ruta plantilla
+meta`, o `ruta plantilla objetivo` para desglosar una meta. Completa el objeto
+y usa `ruta registrar --entrada OPERACION.json --aplicar --json`. Antes de
+ejecutar producto vincula la sesión a una meta u objetivos de la misma meta con
+`ruta vincular --sesion FOLIO --destino ID --aplicar`. La preparación puede
+comenzar antes de ese vínculo. La guía instalada describe la adopción mediante
+`ruta configurar` y cómo comprobar el tramo con `ruta consultar --hasta ID`.

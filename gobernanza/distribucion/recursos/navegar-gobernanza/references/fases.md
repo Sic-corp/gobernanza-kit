@@ -128,6 +128,7 @@ modalidad con el `AGENTS.md` del consumidor y la guía del slot activo.
 Para actualizar el kit instalado sigue la sección «Actualizar una instalación
 existente» de la guía del slot. En la raíz del proyecto,
 `./gobernanza-kit actualizar --solo-plan` muestra el cambio previsto.
+Después de aplicarlo, consulta el [relevo para el agente](#relevo-para-el-agente).
 
 - **Entrada** — solicitud de registrar o preparar composición de una versión.
 - **Lecturas** — contrato funcional y de entrega, manifiesto y fichas aplicables.
@@ -135,6 +136,32 @@ existente» de la guía del slot. En la raíz del proyecto,
 - **Autoridad** — decisión y alcance aplicables. Integración y despliegue se acreditan con su propia evidencia.
 - **Salida** — composición declarada y verificable.
 - **Recuperación** — resuelve discrepancias con evidencia.
+
+## Relevo para el agente
+
+El instalador muestra este prompt con la versión y la raíz Git. Puedes
+copiarlo desde aquí cuando trabajes en el checkout que recibió el kit.
+
+<!-- gobernanza:relevo:inicio -->
+```text
+Parte del kit ya instalado. Identifica la raíz Git y la rama del checkout
+consumidor. Lee AGENTS.md y la guía canónica que declara el repositorio.
+Abre la skill enlazada en el bloque gestionado del kit y ejecuta estado --json
+con el administrador que indique ese bloque para confirmar la versión activa.
+
+Revisa el diff y el plan de instalación o actualización disponibles. Identifica
+el bloque gestionado de AGENTS.md, el lanzador, el selector, el administrador,
+las skills y el inventario de versiones que corresponde a la actualización.
+Preserva las instrucciones propias del repositorio fuera del bloque gestionado,
+su configuración, sus hooks, sus contratos, su código y los cambios ajenos.
+
+Si una referencia propia quedó obsoleta, señala la ruta y propone la edición
+mínima. Antes de escribir o guardar, coteja la autorización y el alcance del
+plan aplicable. En un repositorio con dominios G y S, usa el plan G para el kit.
+Guarda sólo las rutas autorizadas mediante el procedimiento del consumidor.
+Resume qué comprobaste, el lote de cambios del kit y cualquier pendiente.
+```
+<!-- gobernanza:relevo:fin -->
 
 ## Despliegue
 

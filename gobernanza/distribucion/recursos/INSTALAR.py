@@ -8,6 +8,7 @@ import stat
 import sys
 
 IDENTIDAD = None  # Sustituida al construir la entrega.
+GUIA_RELEVO = Path("navegar-gobernanza/references/fases.md")
 
 
 def comprobar(directorio, nombre):
@@ -89,6 +90,34 @@ def presentar(resultado, formato_json):
     return resultado["codigo"]
 
 
+def preparar_relevo(paquete, raiz, base):
+    guia = paquete / "contenido/skill" / GUIA_RELEVO
+    if not guia.is_file():
+        return None
+    inicio = "<!-- gobernanza:relevo:inicio -->\n"
+    inicio_codigo = "```text\n"
+    fin = "\n```\n<!-- gobernanza:relevo:fin -->"
+    _, delimitador, seccion = guia.read_text(encoding="utf-8").partition(inicio)
+    if not delimitador:
+        return None
+    texto, delimitador, _ = seccion.removeprefix(inicio_codigo).partition(fin)
+    if not seccion.startswith(inicio_codigo) or not delimitador or not texto.strip():
+        raise ValueError("El bloque de relevo de la guía instalada está incompleto.")
+    ruta = raiz / base / "skills" / GUIA_RELEVO
+    version = IDENTIDAD["version"] or IDENTIDAD["commit"]
+    return (f"\nGuía instalada: {json.dumps(str(ruta), ensure_ascii=False)}#relevo-para-el-agente\n"
+            "\nPrompt de relevo para tu agente\n\n"
+            f"El kit de gobernanza {version} ya está instalado.\n"
+            f"Raíz Git del consumidor: {json.dumps(str(raiz), ensure_ascii=False)}\n\n"
+            + texto)
+
+
+def presentar_relevo(codigo, texto, formato_json):
+    if codigo == 0 and texto is not None and not formato_json:
+        print(texto)
+    return codigo
+
+
 def ejecutar(args):
     if not sys.flags.isolated:
         raise ValueError("Ejecuta el instalador con python3 -I.")
@@ -122,6 +151,7 @@ def ejecutar(args):
     base = ubicacion.base if ubicacion.ubicable else None
     argv = ["--raiz", str(raiz), args.verbo]
     directo = args.verbo in ("instalar", "actualizar")
+    relevo = None
     if directo or args.verbo == "planificar":
         accion = args.verbo if directo else args.accion
         migrar = False
@@ -133,17 +163,19 @@ def ejecutar(args):
         if directo:
             salida = gestor.planificar(raiz, paquete, accion=accion, modo=modo, base_instalacion=base, **cambios)
             if salida["codigo"] == 0 and not args.solo_plan:
+                relevo = preparar_relevo(paquete, raiz, ubicacion.base)
                 salida = gestor.aplicar(raiz, paquete, salida["plan"], base_instalacion=base)
-            return presentar(salida, args.json)
+            return presentar_relevo(presentar(salida, args.json), relevo, args.json)
         argv += ["--paquete", str(paquete), "--accion", accion, "--salida", args.salida]
         if modo:
             argv += ["--modo", modo]
         argv.extend("--" + nombre.replace("_", "-") for nombre, activo in cambios.items() if activo)
     elif args.verbo == "aplicar":
         argv += ["--paquete", str(paquete), "--plan", args.plan]
+        relevo = preparar_relevo(paquete, raiz, ubicacion.base)
     if args.json:
         argv.append("--json")
-    return cli.main(argv, base_instalacion=base)
+    return presentar_relevo(cli.main(argv, base_instalacion=base), relevo, args.json)
 
 
 if __name__ == "__main__":

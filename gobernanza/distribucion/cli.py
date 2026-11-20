@@ -68,7 +68,7 @@ def _parser():
     v = sub.add_parser("operar", help="Ejecutar el núcleo desde el administrador local",
                        description="Usa gestionar.py [--raiz RUTA] operar VERBO [OPCIONES].")
     v.add_argument("argumentos", nargs=argparse.REMAINDER,
-                   help="contexto, validar, iniciar, verificar o cerrar con sus argumentos")
+                   help="Comando de sesión, sdd, ruta o tablero con sus argumentos")
     v = sub.add_parser("hook-solucion", help="Entrada local al hook de solución de Codex")
     acciones = v.add_subparsers(dest="accion_hook", required=True)
     acciones.add_parser("ejecutar", help="Leer el evento Codex de stdin")

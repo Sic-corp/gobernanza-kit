@@ -1,4 +1,4 @@
-"""Entrada a los cinco verbos desde el administrador de un slot activo."""
+"""Entrada a las operaciones del kit desde el administrador de un slot activo."""
 
 from pathlib import Path
 

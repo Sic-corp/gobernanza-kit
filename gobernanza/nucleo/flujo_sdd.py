@@ -199,7 +199,7 @@ def integrar_documentos(repo):
                 instalar(ref, proyeccion, prosa)
 
 
-def comprobar_fase(raiz, commit, datos):
+def comprobar_fase(raiz, commit, datos, *, reanudacion=False):
     """Coteja un informe preservado contra las entradas Git de la transición."""
     from .acuerdos import huella_obligaciones_materializadas
     from .arboles import LectorArbol, materializar
@@ -225,7 +225,7 @@ def comprobar_fase(raiz, commit, datos):
         if not candidatos:
             raise ValueError(f"{ref} requiere un informe de {etapa} registrado en evidencias.")
         with materializar(raiz, commit) as copia:
-            repo, entradas, autoridad = _entradas(copia, ref)
+            repo, entradas, autoridad = _entradas(copia, ref, reanudacion=reanudacion)
             contexto_sesion = contexto(copia.raiz, sesion=ref)
             if contexto_sesion["errores"]:
                 raise ValueError(contexto_sesion["errores"][0]["mensaje"])
@@ -238,9 +238,12 @@ def comprobar_fase(raiz, commit, datos):
                         or not requeridos or set(informe.get("casos_ejecutados", [])) != requeridos):
                     continue
                 if etapa == "preparacion":
-                    if (informe.get("preparacion_satisfecha") is True
-                            and informe.get("huella_obligaciones") == huella_obligaciones_materializadas(copia.raiz)):
-                        return []
+                    if informe.get("preparacion_satisfecha") is True:
+                        obligaciones = huella_obligaciones_materializadas(
+                            copia.raiz, reanudar_sesion=ref if reanudacion else None,
+                        )
+                        if informe.get("huella_obligaciones") == obligaciones:
+                            return []
                 elif informe.get("pruebas_aprobadas") is True and informe.get("huella_entradas") == _hash(entradas):
                     if estado == "lista":
                         criterios = {c["referencia"] for c in contexto_sesion["criterios"]}
