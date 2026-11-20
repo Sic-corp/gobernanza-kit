@@ -35,7 +35,9 @@ def _selectores_locales(raiz, ubicacion):
             if registro["id"] != nombre or registro.get("resultado") not in resultados:
                 raise ErrorGestor(f"El registro no corresponde a la transacción local: {ruta}")
             for lado in ("anterior", "nuevo"):
-                imagen = registro["rutas"][ubicacion.activo][lado]
+                origen = registro.get("origen_instalacion") if lado == "anterior" else None
+                ruta = f"{origen}/activo.json" if origen is not None else ubicacion.activo
+                imagen = registro["rutas"][ruta][lado]
                 selector = None if imagen is None else json_estricto(_bytes(imagen).decode("utf-8"))
                 if selector != registro[lado]:
                     raise ErrorGestor(f"El selector no coincide con su respaldo en {ruta}.")

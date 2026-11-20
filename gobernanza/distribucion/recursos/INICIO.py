@@ -112,9 +112,9 @@ def _selector(datos):
     return datos
 
 
-def _slot(raiz, selector):
+def _slot(raiz, selector, base):
     _selector(selector)
-    relativa = ".gobernanza-kit/versiones/" + selector["huella_paquete"]
+    relativa = base + "/versiones/" + selector["huella_paquete"]
     # Esta apertura comprueba también todos los ancestros antes del inventario.
     modo, datos = _leer(raiz, relativa + "/manifiesto.json")
     if modo != "100644":
@@ -187,11 +187,18 @@ def _slot(raiz, selector):
 
 def _normal():
     raiz = Path(__file__).absolute().parents[1].resolve()
-    if _existe(raiz, ".gobernanza-kit/transaccion.json"):
+    diarios = (".gobernanza-kit/transaccion.json", "gobernanza/.rutas-kit-transaccion.json")
+    if any(_existe(raiz, diario) for diario in diarios):
         raise ValueError("Hay una transacción pendiente; usa el administrador local para recuperar")
-    selector = _json(_leer(raiz, ".gobernanza-kit/activo.json")[1].decode("utf-8"))
-    slot = _slot(raiz, selector)
-    if _leer(raiz, "gobernanza/__init__.py")[1] != _leer(raiz, ".gobernanza-kit/versiones/" + selector["huella_paquete"] + "/entradas/inicio.py")[1]:
+    opciones = [base for base in ("gobernanza/kit-local", ".gobernanza-kit")
+                if _existe(raiz, base + "/activo.json")]
+    if len(opciones) != 1:
+        raise ValueError("Se requiere un único selector de instalación.")
+    base = opciones[0]
+    selector = _json(_leer(raiz, base + "/activo.json")[1].decode("utf-8"))
+    slot = _slot(raiz, selector, base)
+    candidata = (slot.relative_to(raiz) / "entradas/inicio.py").as_posix()
+    if _leer(raiz, "gobernanza/__init__.py")[1] != _leer(raiz, candidata)[1]:
         raise ValueError("La entrada de gobernanza fue modificada")
     return [str(slot / "contenido/gobernanza")]
 

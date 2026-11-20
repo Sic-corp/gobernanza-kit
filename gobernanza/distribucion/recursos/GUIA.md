@@ -18,16 +18,16 @@ y [distribución](FORMATO_DISTRIBUCION.md) detallan sus comprobaciones. El
 Usa la modalidad indicada en el bloque gestionado de `AGENTS.md` y ejecuta
 la ayuda desde la raíz Git del consumidor.
 
-| Modalidad | Ayuda del registro |
-|---|---|
-| Estándar | `python3 -m gobernanza sdd --help` |
-| Aislada | `python3 -I .gobernanza-kit/gestionar.py operar sdd --help` |
-| Ubicable | `python3 -I RUTA/gestionar.py operar sdd --help` |
+En estándar, `python3 -m gobernanza sdd --help` abre la ayuda SDD.
+En aislado y ubicable, usa `python3 -I gobernanza/kit-local/gestionar.py operar --help`
+y pasa `sdd` como verbo. Desde otra carpeta usa la ruta absoluta al
+administrador y pasa `--raiz R` antes de `operar`.
 
-En ubicable sustituye `RUTA` por la raíz de instalación asignada en
-`gobernanza/rutas-kit.json`. Desde otra carpeta usa la ruta absoluta al
-administrador y pasa `--raiz R` antes de `operar`. Los comandos de trabajo
-usan la misma entrada y la distribución dispone de su propio instalador.
+Si consultas una instalación histórica, conserva la ruta indicada en su
+bloque de AGENTS. Sus entradas eran
+`python3 -I .gobernanza-kit/gestionar.py operar sdd --help` en aislado y
+`python3 -I RUTA/gestionar.py operar sdd --help` en ubicable. En ese caso,
+`RUTA` representa el directorio de la instalación previa.
 
 ## Trabajar con el registro SDD
 
@@ -207,8 +207,7 @@ nueva del último SHA aceptado con un directorio de estado nuevo.
 
 El gestor publica su bloque entre los delimitadores del kit. Conserva las
 instrucciones del consumidor y los enlaces a su guía canónica. La navegación
-instalada vive en `<base>/skills/navegar-gobernanza/SKILL.md`. La base es
-`.gobernanza-kit` en estándar y aislado, o la raíz asignada en ubicable.
+instalada vive en `gobernanza/kit-local/skills/navegar-gobernanza/SKILL.md`.
 
 ```markdown
 <!-- Aquí va el bloque completo que genera el kit. -->
@@ -276,7 +275,7 @@ comprobar las precondiciones del plan al aplicar la transacción.
 
 Usa la carpeta del artefacto que contiene `instalar.py`. Sustituye `R` por la
 raíz del consumidor. Selecciona `estandar`, `aislado` o `ubicable` en el plan.
-Para ubicable declara antes el mapa de instalación de ese consumidor.
+La instalación se fija en `gobernanza/kit-local` desde esa raíz.
 
 ```sh
 python3 -I instalar.py --raiz R planificar --accion instalar --modo estandar --salida PLAN-INSTALAR.json

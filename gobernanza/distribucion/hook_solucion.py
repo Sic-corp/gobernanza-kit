@@ -75,7 +75,7 @@ def gestionado(raiz):
     return bool(_configuracion(_raiz_repositorio(raiz))[-1])
 
 
-def planificar(raiz, *, lanzador=".gobernanza-kit/gestionar.py"):
+def planificar(raiz, *, lanzador=".gobernanza-kit/gestionar.py", lanzador_anterior=None):
     """Calcula la única imagen gestionada, sin publicar ni activar nada."""
     raiz = _raiz_repositorio(raiz)
     relativo = PurePosixPath(lanzador)
@@ -87,11 +87,18 @@ def planificar(raiz, *, lanzador=".gobernanza-kit/gestionar.py"):
     grupo = {"matcher": MATCHER, "hooks": [
         {"type": "command", "command": comando, "statusMessage": MARCA, "timeout": TIMEOUT_CODEX},
     ]}
-    if gestionados:
-        if gestionados != [grupo]:
-            raise ValueError(f"La entrada gestionada de {RUTA_HOOKS} difiere; conserva y concilia su configuración.")
+    if gestionados == [grupo]:
         return {RUTA_HOOKS: (modo, anterior)}
-    grupos.append(grupo)
+    if gestionados:
+        vieja = dict(grupo, hooks=[
+            dict(grupo["hooks"][0], command=comando.replace(
+                "/" + lanzador + '"', "/" + lanzador_anterior + '"'))
+        ]) if lanzador_anterior is not None else None
+        if gestionados != [vieja]:
+            raise ValueError(f"La entrada gestionada de {RUTA_HOOKS} difiere; conserva y concilia su configuración.")
+        grupos[grupos.index(gestionados[0])] = grupo
+    else:
+        grupos.append(grupo)
     return {RUTA_HOOKS: (modo, (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))}
 
 

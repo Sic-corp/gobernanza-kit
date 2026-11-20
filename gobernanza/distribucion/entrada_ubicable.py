@@ -277,16 +277,24 @@ def _selector_de_respaldo(raiz, base, huella):
 def _seleccion_admin(raiz, base, huella):
     if _existe(raiz, _DIARIO):
         d = _json(_leer(raiz, _DIARIO)[1].decode("utf-8"))
+        fija = isinstance(d, dict) and d.get("ruta_fija") is True
+        modos = ("estandar", "aislado", "ubicable") if fija else ("ubicable",)
         if (not isinstance(d, dict) or type(d.get("schema")) is not int or d["schema"] != 1
-                or d.get("modo") != "ubicable" or d.get("base_instalacion") != base
+                or (fija and base != "gobernanza/kit-local")
+                or d.get("modo") not in modos or d.get("base_instalacion") != base
                 or not isinstance(d.get("id"), str) or re.fullmatch(r"[0-9a-f]{32}", d["id"]) is None
                 or d.get("accion") not in {"instalar", "actualizar"}
-                or d.get("fase") not in {"preparado", "version_lista", "entradas_publicadas", "selector_publicado"}
+                or d.get("fase") not in {"preparado", "version_lista", "entradas_publicadas",
+                                         "selector_publicado", "purga_confirmada"}
                 or not isinstance(d.get("rutas"), dict)
                 or d.get("huella_transaccion") != _hash({k: v for k, v in d.items() if k != "huella_transaccion"})):
             raise ValueError("Diario de recuperación inválido, alterado o de otra ubicación")
         nuevo = _selector(d.get("nuevo"))
         anterior = d.get("anterior")
+        if fija:
+            if huella is not None and huella != nuevo["huella_paquete"]:
+                raise ValueError("Usa el administrador del slot candidato para recuperar esta operación")
+            return nuevo, d.get("migracion_navegacion") is True
         if "migracion_navegacion" in d:
             if (d["migracion_navegacion"] is not True or d["accion"] != "actualizar"
                     or anterior is None or _selector(anterior) == nuevo):

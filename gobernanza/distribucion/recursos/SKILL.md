@@ -11,8 +11,8 @@ Este documento vive en `<slot>/contenido/skill/SKILL.md`. El directorio
 `contenido/` es `raiz_kit`. Conserva el código, esta skill y sus referencias de
 la versión instalada. `raiz_trabajo` es la raíz Git del consumidor. Lee la
 entrada a la skill enlazada desde AGENTS para ubicar el selector `activo.json`
-y el slot que identifica. En modo ubicable esa entrada vive bajo la raíz de
-instalación asignada por el consumidor.
+y el slot que identifica. En las entregas de ruta fija esa entrada vive
+en `gobernanza/kit-local` para los tres modos.
 
 Las referencias del procedimiento viven aquí: [guía](../docs/kit-local/GUIA.md),
 [formato del núcleo](../docs/kit-local/FORMATO_NUCLEO.md),
@@ -67,7 +67,8 @@ resultado concreto que necesite revisión.
 
 Consulta la ayuda desde la raíz de trabajo. En modo estándar usa
 `python3 -m gobernanza --help`. Si el bloque gestionado de AGENTS declara modo
-aislado, usa `python3 -I .gobernanza-kit/gestionar.py operar --help` y ejecuta
+aislado, usa el administrador que indica AGENTS. En la ruta fija ejecuta
+`python3 -I gobernanza/kit-local/gestionar.py operar --help` y pasa
 `contexto`, `validar`, `iniciar`, `verificar`, `cerrar` y `sdd` desde esa entrada.
 En modo ubicable usa el administrador del bloque de AGENTS. Para registro y
 consulta tipificada prueba `sdd --help` con el prefijo que corresponda según

@@ -49,9 +49,9 @@ variante POSIX, sustituye `instalar` por `actualizar`.
 El bootstrap descarga la versión indicada, coteja el SHA-256 del ZIP completo
 y ejecuta el instalador autónomo. El comando planifica y aplica el cambio.
 Usa `--solo-plan` para inspeccionar el plan, `--modo aislado` para reservar un
-espacio Python propio, o `--modo ubicable` si el proyecto declara la raíz de
-instalación en `gobernanza/rutas-kit.json`. El modo de instalación predeterminado
-es estándar. El hook de edición de solución para Codex se activa sólo con
+espacio Python propio, o `--modo ubicable` para usar la variante apta para
+guardar el slot completo en Git. Todos los modos usan `gobernanza/kit-local`
+dentro de la raíz Git. El modo predeterminado es estándar. El hook de edición de solución para Codex se activa sólo con
 `--activar-hook-solucion`.
 
 El [código del bootstrap](gobernanza/distribucion/recursos/instalar.sh) está en

@@ -29,6 +29,8 @@ from . import sustitucion
 
 
 BASE = ".gobernanza-kit"
+BASE_FIJA = "gobernanza/kit-local"
+CAPACIDAD_RUTA_FIJA = "contenido/gobernanza/distribucion/ubicacion.py"
 DIARIO = BASE + "/transaccion.json"
 PUENTE = "gobernanza/__init__.py"
 ADMINISTRADOR = BASE + "/gestionar.py"
@@ -81,6 +83,7 @@ def _base_ubicable(base):
 @dataclass(frozen=True)
 class _Ubicacion:
     base: str = BASE
+    fija: bool = False
 
     @property
     def ubicable(self):
@@ -115,6 +118,8 @@ class _Ubicacion:
     def entradas(self, modo, *, lanzador=False):
         if self.ubicable:
             entradas = {self.administrador: CAPACIDAD_UBICABLE, self.base + "/SKILL.md": None}
+            if self.fija and modo == "estandar":
+                entradas[PUENTE] = ENTRADAS[PUENTE]
         else:
             entradas = ENTRADAS_POR_MODO[modo]
         return {**entradas, LANZADOR: CAPACIDAD_LANZADOR} if lanzador else entradas
@@ -125,6 +130,7 @@ class _Ubicacion:
 
 
 _CLASICA = _Ubicacion()
+_FIJA = _Ubicacion(BASE_FIJA, fija=True)
 
 
 def _imagen_entrada(slot, entrada):
@@ -351,6 +357,9 @@ def _bloque_agentes(modo, ubicacion, navegacion, *, arranque=False, sdd=False, l
             f"\nSigue la [skill local de gobernanza]({base}/SKILL.md).\n"
             f"Usa `python3 -I {ubicacion.administrador} operar` para ejecutar los verbos del kit.\n"
         ).encode("utf-8") + FIN
+        if ubicacion.fija and modo != "ubicable":
+            modo_texto = "estándar" if modo == "estandar" else "aislado"
+            bloque = bloque[:-len(FIN)] + f"Modo {modo_texto}.\n".encode("utf-8") + FIN
     if sdd:
         bloque = bloque[:-len(FIN)] + (
             "Cuando el proyecto use el registro SDD, aplica las operaciones SDD de la skill local "
@@ -389,12 +398,13 @@ def _anteponer_bloque(contenido, bloque):
 
 def _agentes(imagen, *, instalado, modo, ubicacion=_CLASICA, navegacion=False, arranque=False,
              migracion=False, publicar=False, sdd=False, sdd_anterior=None,
-             lanzador=False, lanzador_anterior=None):
+             lanzador=False, lanzador_anterior=None, origen=None):
     contenido = b"" if imagen is None else _bytes(imagen)
     previo = dict(sdd=sdd if sdd_anterior is None else sdd_anterior,
                   lanzador=lanzador if lanzador_anterior is None else lanzador_anterior)
-    historico = _bloque_agentes(modo, ubicacion, navegacion and not migracion, **previo)
-    con_arranque = _bloque_agentes(modo, ubicacion, navegacion and not migracion, arranque=arranque, **previo)
+    origen = ubicacion if origen is None else origen
+    historico = _bloque_agentes(modo, origen, navegacion and not migracion, **previo)
+    con_arranque = _bloque_agentes(modo, origen, navegacion and not migracion, arranque=arranque, **previo)
     deseado = _bloque_agentes(modo, ubicacion, navegacion, arranque=arranque, sdd=sdd, lanzador=lanzador)
     inicios, finales = contenido.count(INICIO), contenido.count(FIN)
     if not inicios and not finales:
@@ -417,11 +427,13 @@ def _agentes(imagen, *, instalado, modo, ubicacion=_CLASICA, navegacion=False, a
     return contenido
 
 
-def _namespace(raiz, instalado):
+def _namespace(raiz, instalado, *, fija=False):
     carpeta = _segura(raiz, "gobernanza")
     if not carpeta.exists():
         return
     for actual, carpetas, hojas in os.walk(carpeta, followlinks=False):
+        if fija and Path(actual) == carpeta and "kit-local" in carpetas:
+            carpetas.remove("kit-local")
         for nombre in carpetas + hojas:
             ruta = (Path(actual) / nombre).relative_to(raiz).as_posix()
             _segura(raiz, ruta)
@@ -466,7 +478,15 @@ def _estado(raiz, ubicacion):
     arranque = navegacion and _admite_arranque(slot)
     sdd = navegacion and _anuncia_sdd(slot)
     lanzador = (slot / CAPACIDAD_LANZADOR).is_file()
-    if modo == "estandar" and agentes is not None:
+    if ubicacion.fija and agentes is not None:
+        texto = _bytes(agentes)
+        for candidato in ("estandar", "aislado"):
+            if any(_bloque_agentes(candidato, ubicacion, navegacion, arranque=forma,
+                                  sdd=sdd, lanzador=lanzador) in texto
+                   for forma in (False, arranque)):
+                modo = candidato
+                break
+    if modo == "estandar" and not ubicacion.fija and agentes is not None:
         texto = _bytes(agentes)
         if any(_bloque_agentes("aislado", ubicacion, navegacion, arranque=forma, sdd=sdd, lanzador=lanzador) in texto
                for forma in (False, arranque)):
@@ -474,7 +494,7 @@ def _estado(raiz, ubicacion):
     _agentes(agentes, instalado=True, modo=modo, ubicacion=ubicacion, navegacion=navegacion,
              arranque=arranque, sdd=sdd, lanzador=lanzador)
     if modo == "estandar":
-        _namespace(raiz, instalado=True)
+        _namespace(raiz, instalado=True, fija=ubicacion.fija)
     else:
         if not (slot / CAPACIDAD_AISLADA).is_file():
             raise ErrorGestor(f"La versión instalada no admite el modo {modo}.")
@@ -490,10 +510,11 @@ def _estado(raiz, ubicacion):
     return activo, slot, agentes, modo
 
 
-def _hook_solucion(raiz, ubicacion):
+def _hook_solucion(raiz, ubicacion, origen=None):
     from .hook_solucion import planificar as preparar_hook
 
-    nuevas = preparar_hook(raiz, lanzador=ubicacion.administrador)
+    anterior = origen.administrador if origen is not None and origen != ubicacion else None
+    nuevas = preparar_hook(raiz, lanzador=ubicacion.administrador, lanzador_anterior=anterior)
     if set(nuevas) != {HOOK_SOLUCION}:
         raise ErrorGestor("La activación sólo puede publicar el archivo de hooks de Codex.")
     modo, contenido = nuevas[HOOK_SOLUCION]
@@ -522,10 +543,20 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
     lanzador = CAPACIDAD_LANZADOR in manifiesto["archivos"]
     if modo not in (None, "ubicable", *ENTRADAS_POR_MODO):
         raise ErrorGestor("Modo inválido: usa estandar, aislado o ubicable.")
+    fija = CAPACIDAD_RUTA_FIJA in manifiesto["archivos"]
     ubicacion, firma_mapa = _CLASICA, None
-    if base_instalacion is not None and modo not in (None, "ubicable"):
+    origen = None
+    if fija:
+        from .ubicacion import origen as reconocer_origen
+
+        origen, firma_mapa = reconocer_origen(raiz)
+        ubicacion = _FIJA
+        if base_instalacion not in (None, BASE_FIJA, origen.base):
+            raise ErrorGestor("El instalador debe operar desde la ubicación reconocida del kit.")
+        carpeta = _comprobar_ubicacion(raiz, ubicacion)
+    elif base_instalacion is not None and modo not in (None, "ubicable"):
         raise ErrorGestor("El plan no puede cambiar el modo de la instalación ubicable.")
-    if modo == "ubicable" or base_instalacion is not None:
+    if not fija and (modo == "ubicable" or base_instalacion is not None):
         ubicacion, firma_mapa = _mapa_ubicable(raiz)
         if base_instalacion is not None and ubicacion.base != base_instalacion:
             raise ErrorGestor("El mapa de instalación cambió de raíz; prepara una migración explícita.")
@@ -533,8 +564,10 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
         carpeta = _comprobar_ubicacion(raiz, ubicacion)
         if lanzador and _clave_portable(ubicacion.base.split("/", 1)[0]) == LANZADOR:
             raise ErrorGestor(f"La raíz ubicable se solapa con la entrada del proyecto: {LANZADOR}.")
-    retirados = sustitucion.inventariar(raiz, ubicacion, nuevo["huella_paquete"]) if reemplazar_anteriores else {}
-    anterior, slot, agentes, modo_instalado = _estado(raiz, ubicacion)
+    origen = ubicacion if origen is None else origen
+    traslado = origen.base != ubicacion.base
+    retirados = sustitucion.inventariar(raiz, origen, nuevo["huella_paquete"]) if reemplazar_anteriores else {}
+    anterior, slot, agentes, modo_instalado = _estado(raiz, origen)
     if activar_hook_solucion and CAPACIDAD_HOOK not in manifiesto["archivos"]:
         raise ErrorGestor("El paquete candidato carece del verificador para el hook de solución.")
     if modo is not None and modo_instalado is not None and modo != modo_instalado:
@@ -557,6 +590,11 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
             and _capturar(raiz, LANZADOR) is not None):
         raise ErrorGestor(f"Entrada sin procedencia compatible: {LANZADOR}")
     sdd_anterior = navegacion_previa and _anuncia_sdd(slot)
+    viejas = dict(origen.entradas(modo, lanzador=lanzador_anterior)) if anterior is not None else {}
+    if navegacion_previa:
+        viejas.update(origen.guia())
+    if traslado:
+        viejas[origen.activo] = None
     if sdd_anterior and not sdd:
         raise ErrorGestor("Retirar las instrucciones SDD instaladas exige una migración propia.")
     migracion = anterior is not None and navegacion and not navegacion_previa
@@ -570,8 +608,8 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
         raise ErrorGestor("La opción de transición requiere pasar de un slot histórico a uno con navegación.")
     if navegacion:
         guia = ubicacion.guia()
-        _comprobar_guia(raiz, ubicacion, vacia=ubicacion.ubicable and anterior is None)
-        if not navegacion_previa:
+        _comprobar_guia(raiz, ubicacion, vacia=ubicacion.ubicable and (anterior is None or traslado))
+        if not navegacion_previa or traslado:
             for ruta in guia:
                 if _capturar(raiz, ruta) is not None:
                     raise ErrorGestor(f"Guía de navegación sin procedencia compatible: {ruta}")
@@ -580,10 +618,11 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
         if accion == "actualizar":
             raise ErrorGestor("No existe una instalación reconocida para actualizar.")
         if modo == "estandar":
-            _namespace(raiz, instalado=False)
+            _namespace(raiz, instalado=False, fija=fija)
         elif _puente_estandar(raiz, paquete):
             raise ErrorGestor("Hay un puente estándar sin procedencia reconocida.")
-        for ruta in entradas:
+    if anterior is None or traslado:
+        for ruta in {*entradas, ubicacion.activo} - viejas.keys():
             if _capturar(raiz, ruta) is not None:
                 raise ErrorGestor(f"Entrada sin procedencia compatible: {ruta}")
         if ubicacion.ubicable and carpeta.exists():
@@ -593,7 +632,7 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
             if any(nombre not in reservados and not re.fullmatch(r"preparacion-[a-f0-9]{32}", nombre)
                    for nombre in os.listdir(carpeta)):
                 raise ErrorGestor("La raíz de instalación contiene archivos ajenos.")
-    elif accion == "instalar" and anterior != nuevo:
+    if anterior is not None and accion == "instalar" and (anterior != nuevo or traslado):
         raise ErrorGestor("Ya hay otra versión instalada; prepara una actualización explícita.")
     if anterior is not None:
         if anterior["fuente_commit"] == nuevo["fuente_commit"] and anterior != nuevo:
@@ -605,13 +644,15 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
             estables = [] if ubicacion.ubicable else ["entradas/SKILL.md"]
             if ubicacion.ubicable and _imagen_entrada(slot, None) != _imagen_entrada(paquete, None):
                 raise ErrorGestor("La transición de navegación conserva la skill operativa ubicable.")
+        if fija and not origen.fija:
+            estables = []
         for entrada in estables:
             if viejo[entrada] != manifiesto["archivos"][entrada]:
                 raise ErrorGestor("El paquete requiere modificar entradas estables; necesita acuerdo de migración.")
     contenido_agentes = _agentes(agentes, instalado=anterior is not None, modo=modo, ubicacion=ubicacion,
                                  navegacion=navegacion, arranque=arranque, migracion=migracion, publicar=True,
                                  sdd=sdd, sdd_anterior=sdd_anterior,
-                                 lanzador=lanzador, lanzador_anterior=lanzador_anterior)
+                                 lanzador=lanzador, lanzador_anterior=lanzador_anterior, origen=origen)
     cambia_agentes = agentes is None or _bytes(agentes) != contenido_agentes
     destino = _slot(raiz, nuevo, ubicacion, validar=False)
     if destino.exists() and _selector(_validar_paquete(destino)) != nuevo:
@@ -621,22 +662,36 @@ def _plan(raiz, paquete, accion, modo=None, *, base_instalacion=None, migrar_nav
 
         if gestionado(raiz):
             raise ErrorGestor("El hook de solución activo requiere un paquete que conserve su ejecutor.")
-    extras = _hook_solucion(raiz, ubicacion) if activar_hook_solucion else {}
-    rutas_previstas = ubicacion.rutas(modo, navegacion, lanzador=lanzador) | extras.keys()
+    if traslado and _capturar(raiz, HOOK_SOLUCION) is not None:
+        from .hook_solucion import gestionado
+
+        activar_hook_solucion = activar_hook_solucion or gestionado(raiz)
+    extras = _hook_solucion(raiz, ubicacion, origen) if activar_hook_solucion else {}
+    eliminar = sorted(viejas.keys() - entradas.keys() - {ubicacion.activo})
+    rutas_previstas = ubicacion.rutas(modo, navegacion, lanzador=lanzador) | extras.keys() | set(eliminar)
     firmas = {r: _firma(_capturar(raiz, r)) for r in sorted(rutas_previstas)}
     cambia_hook = any(firmas[r] != _firma(imagen) for r, imagen in extras.items())
     diff = [dict(ruta=r, tipo="alta" if r not in viejo else "baja" if r not in manifiesto["archivos"] else "modificacion",
                  anterior=viejo.get(r), nuevo=manifiesto["archivos"].get(r))
             for r in sorted(viejo.keys() | manifiesto["archivos"].keys()) if viejo.get(r) != manifiesto["archivos"].get(r)]
     plan = dict(schema=1, accion=accion, raiz=str(raiz), anterior=anterior, nuevo=nuevo, diff=diff,
-                sin_cambios=anterior == nuevo and not cambia_agentes and not cambia_hook and not retirados,
+                sin_cambios=anterior == nuevo and not cambia_agentes and not cambia_hook and not retirados and not eliminar,
                 compatibilidad=manifiesto["compatibilidad"], precondiciones=firmas, config_consumidor=config,
                 destinos=dict(version=ubicacion.version(nuevo), entradas=sorted(entradas.keys() | extras.keys()), agentes="AGENTS.md"))
-    if modo != "estandar":
+    if modo != "estandar" or fija:
         plan["modo"] = modo
     if ubicacion.ubicable:
-        plan.update(base_instalacion=ubicacion.base, mapa_instalacion=firma_mapa)
+        plan["base_instalacion"] = ubicacion.base
+        if not fija or firma_mapa is not None:
+            plan["mapa_instalacion"] = firma_mapa
         plan["destinos"].update(selector=ubicacion.activo, diario=ubicacion.diario, bloqueo=ubicacion.bloqueo)
+    if fija:
+        plan["ruta_fija"] = True
+        plan["ubicacion_anterior_fija"] = origen.fija
+        if eliminar:
+            plan["eliminar_entradas"] = eliminar
+        if traslado:
+            plan.update(origen_instalacion=origen.base, guia_origen=navegacion_previa)
     if migracion:
         plan["migracion_navegacion"] = True
     if arranque and cambia_agentes:
@@ -664,10 +719,20 @@ def planificar(raiz, paquete, *, accion="instalar", modo=None, base_instalacion=
         return _salida("planificar", exc, raiz=raiz)
 
 
+def _ubicacion_consulta(raiz, base_instalacion):
+    if base_instalacion in (None, BASE_FIJA):
+        candidata = _leer_json(raiz, _FIJA.activo)
+        if candidata is not None:
+            clasica = _Ubicacion(BASE_FIJA)
+            slot = _slot(raiz, candidata, clasica)
+            return _FIJA if (slot / CAPACIDAD_RUTA_FIJA).is_file() else clasica
+    return _CLASICA if base_instalacion is None else _Ubicacion(_base_ubicable(base_instalacion))
+
+
 def inspeccionar(raiz, *, base_instalacion=None):
     try:
         raiz = _raiz_repositorio(raiz)
-        ubicacion = _CLASICA if base_instalacion is None else _Ubicacion(_base_ubicable(base_instalacion))
+        ubicacion = _ubicacion_consulta(raiz, base_instalacion)
         if ubicacion.ubicable:
             _comprobar_ubicacion(raiz, ubicacion)
         activo, _, _, modo = _estado(raiz, ubicacion)
@@ -710,6 +775,15 @@ def _sellar(diario):
     return dict(diario, huella_transaccion=_hash({k: v for k, v in diario.items() if k != "huella_transaccion"}))
 
 
+def _origen_registrado(ubicacion, registro):
+    base = registro.get("origen_instalacion")
+    if base is None:
+        return ubicacion
+    if not ubicacion.fija or base == ubicacion.base:
+        raise ErrorGestor("Origen de traslado inválido.")
+    return _CLASICA if base == BASE else _Ubicacion(_base_ubicable(base))
+
+
 def _validar_diario(diario, ubicacion):
     if (not isinstance(diario, dict) or type(diario.get("schema")) is not int or diario["schema"] != 1
             or not isinstance(diario.get("id"), str) or not re.fullmatch(r"[a-f0-9]{32}", diario["id"])
@@ -718,8 +792,14 @@ def _validar_diario(diario, ubicacion):
         raise ErrorGestor("Diario pendiente inválido; no se adivina una recuperación.")
     if diario["anterior"] is not None: _selector_valido(diario["anterior"])
     _selector_valido(diario["nuevo"])
+    fija = diario.get("ruta_fija", False)
+    if type(fija) is not bool or fija and ubicacion.base != BASE_FIJA:
+        raise ErrorGestor("La ruta fija del diario no coincide con la instalación.")
+    if ubicacion.base == BASE_FIJA and ubicacion.fija != fija:
+        ubicacion = _Ubicacion(BASE_FIJA, fija=fija)
     modo = diario.get("modo", "estandar")
-    modos = ("ubicable",) if ubicacion.ubicable else tuple(ENTRADAS_POR_MODO)
+    modos = (("estandar", "aislado", "ubicable") if fija else
+             ("ubicable",) if ubicacion.ubicable else tuple(ENTRADAS_POR_MODO))
     base = ubicacion.base if ubicacion.ubicable else None
     migracion = diario.get("migracion_navegacion", False)
     activacion = diario.get("activar_hook_solucion", False)
@@ -732,11 +812,29 @@ def _validar_diario(diario, ubicacion):
         raise ErrorGestor("El diario declara una sustitución o activación inválida.")
     if modo not in modos or diario.get("base_instalacion") != base or not isinstance(diario.get("rutas"), dict):
         raise ErrorGestor("El diario contiene destinos ajenos o carece de respaldos.")
+    origen = _origen_registrado(ubicacion, diario)
+    traslado = origen != ubicacion
+    if (traslado and (diario["accion"] != "actualizar" or diario["anterior"] is None
+                      or (origen.ubicable != (modo == "ubicable"))
+                      or type(diario.get("guia_origen")) is not bool)):
+        raise ErrorGestor("La procedencia del traslado es incompatible con el diario.")
     destinos = set(diario["rutas"])
     if activacion:
         if HOOK_SOLUCION not in destinos:
             raise ErrorGestor("Falta la imagen de activación del hook en el diario.")
         destinos.remove(HOOK_SOLUCION)
+    bajas = {r for r in destinos if isinstance(diario["rutas"][r], dict)
+             and diario["rutas"][r].get("nuevo") is None}
+    destinos -= bajas
+    if traslado:
+        esperadas = origen.rutas(modo, diario["guia_origen"], lanzador=lanzador) - destinos
+        if bajas != esperadas:
+            raise ErrorGestor("El diario contiene bajas distintas de las entradas históricas.")
+        respaldo = diario["rutas"][origen.activo].get("anterior")
+        if respaldo is None or json_estricto(_bytes(respaldo).decode("utf-8")) != diario["anterior"]:
+            raise ErrorGestor("El respaldo del selector histórico no coincide.")
+    elif bajas:
+        raise ErrorGestor("El diario declara bajas fuera de un traslado.")
     navegacion = destinos == ubicacion.rutas(modo, True, lanzador=lanzador)
     if (not navegacion and destinos != ubicacion.rutas(modo, lanzador=lanzador)
             or type(migracion) is not bool
@@ -746,12 +844,16 @@ def _validar_diario(diario, ubicacion):
         if not isinstance(imagenes, dict) or set(imagenes) != {"anterior", "nuevo"}:
             raise ErrorGestor("Imágenes del diario inválidas.")
         if imagenes["anterior"] is not None: _bytes(imagenes["anterior"])
-        _bytes(imagenes["nuevo"])
+        if ruta in bajas:
+            if imagenes["anterior"] is None:
+                raise ErrorGestor("Una entrada retirada carece de imagen previa.")
+        else:
+            _bytes(imagenes["nuevo"])
         if ruta == LANZADOR and any(imagen is not None and imagen["permisos"] != 0o755
                                    for imagen in imagenes.values()):
             raise ErrorGestor(f"Permisos del lanzador inválidos en el diario: {ruta}.")
     if navegacion:
-        esperado_ausente = migracion or diario["anterior"] is None
+        esperado_ausente = traslado or migracion or diario["anterior"] is None
         if any((diario["rutas"][ruta]["anterior"] is None) != esperado_ausente for ruta in ubicacion.guia()):
             raise ErrorGestor("Los respaldos de navegación no corresponden a la transición.")
     return diario
@@ -784,9 +886,10 @@ def _rollback(raiz, diario, resultado_tx, ubicacion):
         actual = _capturar(raiz, ruta)
         if actual != imagenes["anterior"] and actual != imagenes["nuevo"]:
             raise ErrorGestor(f"Edición posterior o imagen desconocida en {ruta}; se preserva sin sobrescribir.")
+    origen = _origen_registrado(ubicacion, diario)
     if diario.get("retirados"):
-        sustitucion.restaurar(raiz, ubicacion.base, diario["id"], diario["retirados"])
-    if diario["anterior"] is not None: _slot(raiz, diario["anterior"], ubicacion)
+        sustitucion.restaurar(raiz, origen.base, diario["id"], diario["retirados"])
+    if diario["anterior"] is not None: _slot(raiz, diario["anterior"], origen)
     # Restaurar selector primero desactiva la nueva versión antes de retirar puentes.
     for ruta in [ubicacion.activo, *sorted(diario["rutas"].keys() - {ubicacion.activo})]:
         imagenes = diario["rutas"][ruta]
@@ -802,7 +905,8 @@ def _finalizar_sustitucion(raiz, diario, ubicacion):
     for ruta, imagenes in diario["rutas"].items():
         if _capturar(raiz, ruta) != imagenes["nuevo"]:
             raise ErrorGestor(f"La imagen publicada en {ruta} cambió; se conserva para revisión.")
-    sustitucion.purgar(raiz, ubicacion.base, diario["id"], diario["retirados"])
+    origen = _origen_registrado(ubicacion, diario)
+    sustitucion.purgar(raiz, origen.base, diario["id"], diario["retirados"])
     return _historia(raiz, diario, "aplicada", ubicacion)
 
 
@@ -865,7 +969,8 @@ def _copiar_slot(raiz, paquete, selector, ubicacion):
 def _repeticion(raiz, plan, actual, ubicacion):
     if (actual["nuevo"] != plan.get("nuevo") or not actual["sin_cambios"]
             or actual.get("modo") != plan.get("modo")
-            or actual.get("mapa_instalacion") != plan.get("mapa_instalacion")
+            or (not plan.get("ruta_fija")
+                and actual.get("mapa_instalacion") != plan.get("mapa_instalacion"))
             or actual["config_consumidor"] != plan.get("config_consumidor")):
         return False
     carpeta = _segura(raiz, ubicacion.transacciones)
@@ -896,9 +1001,20 @@ def aplicar(raiz, paquete, plan, *, base_instalacion=None):
             raise ErrorGestor("Plan alterado o incompleto; prepara uno nuevo.")
         modo = plan.get("modo")
         base = plan.get("base_instalacion")
-        if base_instalacion is not None and base != base_instalacion:
+        if base_instalacion is not None and base_instalacion not in (base, plan.get("origen_instalacion")):
             raise ErrorGestor("El plan corresponde a otra ubicación.")
-        ubicacion = _Ubicacion(_base_ubicable(base)) if modo == "ubicable" else _CLASICA
+        fija = plan.get("ruta_fija", False)
+        if type(fija) is not bool or fija and base != BASE_FIJA:
+            raise ErrorGestor("Un plan de ruta fija debe instalar en gobernanza/kit-local.")
+        ubicacion = _CLASICA
+        if fija:
+            ubicacion = _FIJA
+        elif modo == "ubicable":
+            ubicacion = _Ubicacion(_base_ubicable(base))
+        origen = _origen_registrado(ubicacion, plan)
+        if fija and origen == ubicacion and not plan.get("ubicacion_anterior_fija"):
+            origen = _Ubicacion(ubicacion.base)
+        traslado = origen.base != ubicacion.base
         migracion = plan.get("migracion_navegacion", False)
         extensiones = dict(migrar_navegacion=migracion,
                            reemplazar_anteriores=plan.get("reemplazar_anteriores", False),
@@ -915,7 +1031,7 @@ def aplicar(raiz, paquete, plan, *, base_instalacion=None):
                 raise ErrorGestor("Las precondiciones cambiaron al tomar el lock.")
             _copiar_slot(raiz, paquete, plan["nuevo"], ubicacion)
             slot = _slot(raiz, plan["nuevo"], ubicacion)
-            if ubicacion.ubicable:
+            if ubicacion.ubicable and (not fija or traslado and origen.ubicable):
                 if _firma(_capturar(raiz, MAPA_UBICABLE)) != plan["mapa_instalacion"]:
                     raise ErrorGestor("El mapa cambió antes de publicar.")
             rutas = {}
@@ -924,29 +1040,33 @@ def aplicar(raiz, paquete, plan, *, base_instalacion=None):
             navegacion = (slot / NAVEGACION[0]).is_file()
             guia = ubicacion.guia() if navegacion else {}
             if guia:
-                _comprobar_guia(raiz, ubicacion, vacia=ubicacion.ubicable and plan["anterior"] is None)
+                _comprobar_guia(raiz, ubicacion, vacia=ubicacion.ubicable and (traslado or plan["anterior"] is None))
                 entradas = {**entradas, **guia}
             for ruta, entrada in entradas.items():
                 rutas[ruta] = dict(anterior=_capturar(raiz, ruta), nuevo=_imagen_entrada(slot, entrada))
             if lanzador and _firma(rutas[LANZADOR]["nuevo"]) != plan.get("imagen_lanzador"):
                 raise ErrorGestor(f"La imagen aprobada del lanzador cambió: {LANZADOR}.")
-            extras = _hook_solucion(raiz, ubicacion) if extensiones["activar_hook_solucion"] else {}
+            extras = _hook_solucion(raiz, ubicacion, origen) if extensiones["activar_hook_solucion"] else {}
             for ruta, imagen in extras.items():
                 if _firma(imagen) != plan.get("imagen_hook"):
                     raise ErrorGestor("La imagen aprobada del hook cambió antes de publicar.")
                 rutas[ruta] = dict(anterior=_capturar(raiz, ruta), nuevo=imagen)
             agentes = _capturar(raiz, "AGENTS.md")
-            previo = _slot(raiz, plan["anterior"], ubicacion) if plan["anterior"] is not None else None
+            previo = _slot(raiz, plan["anterior"], origen) if plan["anterior"] is not None else None
             contenido = _agentes(agentes, instalado=plan["anterior"] is not None, modo=modo or "estandar",
                                  ubicacion=ubicacion, navegacion=navegacion,
                                  arranque=navegacion and _admite_arranque(slot), migracion=migracion, publicar=True,
                                  sdd=navegacion and _anuncia_sdd(slot),
                                  sdd_anterior=previo is not None and (previo / NAVEGACION[0]).is_file()
                                  and _anuncia_sdd(previo), lanzador=lanzador,
-                                 lanzador_anterior=previo is not None and (previo / CAPACIDAD_LANZADOR).is_file())
+                                 lanzador_anterior=previo is not None and (previo / CAPACIDAD_LANZADOR).is_file(),
+                                 origen=origen)
             rutas["AGENTS.md"] = dict(anterior=agentes, nuevo=_imagen(contenido, 0o644 if agentes is None else agentes["permisos"]))
             activo = ubicacion.activo
             rutas[activo] = dict(anterior=_capturar(raiz, activo), nuevo=_imagen(_json(plan["nuevo"])))
+            eliminar = plan.get("eliminar_entradas", [])
+            for ruta in eliminar:
+                rutas[ruta] = dict(anterior=_capturar(raiz, ruta), nuevo=None)
             if any(_firma(imagenes["anterior"]) != plan["precondiciones"][ruta]
                    for ruta, imagenes in rutas.items()):
                 raise ErrorGestor("Una entrada gestionada cambió antes de publicar.")
@@ -955,7 +1075,13 @@ def aplicar(raiz, paquete, plan, *, base_instalacion=None):
             if modo is not None:
                 diario["modo"] = modo
             if ubicacion.ubicable:
-                diario.update(base_instalacion=base, mapa_instalacion=plan["mapa_instalacion"])
+                diario["base_instalacion"] = base
+                if "mapa_instalacion" in plan:
+                    diario["mapa_instalacion"] = plan["mapa_instalacion"]
+            if fija:
+                diario["ruta_fija"] = True
+            if traslado:
+                diario.update(origen_instalacion=origen.base, guia_origen=plan["guia_origen"])
             if migracion:
                 diario["migracion_navegacion"] = True
             if extras:
@@ -986,12 +1112,16 @@ def aplicar(raiz, paquete, plan, *, base_instalacion=None):
                 if _capturar(raiz, activo) != rutas[activo]["anterior"]:
                     raise ErrorGestor("El selector cambió antes de publicar.")
                 _slot(raiz, plan["nuevo"], ubicacion)
+                for ruta in eliminar:
+                    if _capturar(raiz, ruta) != rutas[ruta]["anterior"]:
+                        raise ErrorGestor(f"La entrada histórica cambió antes de retirar: {ruta}")
+                    _eliminar(raiz, ruta)
                 _escribir(raiz, activo, rutas[activo]["nuevo"], exclusivo=rutas[activo]["anterior"] is None)
                 diario = _guardar_diario(raiz, dict(diario, fase="selector_publicado"), ubicacion)
                 _punto("selector_publicado")
                 _punto("antes_finalizar")
                 if diario.get("retirados"):
-                    sustitucion.apartar(raiz, ubicacion.base, diario["id"], diario["retirados"])
+                    sustitucion.apartar(raiz, origen.base, diario["id"], diario["retirados"])
                     _punto("slots_apartados")
                     diario = _guardar_diario(raiz, dict(diario, fase="purga_confirmada"), ubicacion)
                     _punto("purga_confirmada")
@@ -1012,12 +1142,20 @@ def recuperar(raiz, *, base_instalacion=None):
     """Restaura o completa una transacción pendiente según la decisión guardada."""
     try:
         raiz = _raiz_repositorio(raiz)
-        if base_instalacion is None and _capturar(raiz, DIARIO_UBICABLE) is not None:
+        pendiente_ubicable = _capturar(raiz, DIARIO_UBICABLE)
+        fija = False
+        if (base_instalacion is None or base_instalacion == BASE_FIJA) and pendiente_ubicable is not None:
             if _capturar(raiz, DIARIO) is not None:
                 raise ErrorGestor("Hay diarios simultáneos de dos modos; conserva ambos para revisión.")
-            pendiente = _leer_json(raiz, DIARIO_UBICABLE)
-            base_instalacion = _base_ubicable(pendiente["base_instalacion"])
-        ubicacion = _CLASICA if base_instalacion is None else _Ubicacion(_base_ubicable(base_instalacion))
+            pendiente = json_estricto(_bytes(pendiente_ubicable).decode("utf-8"))
+            base = _base_ubicable(pendiente["base_instalacion"])
+            if base_instalacion is not None and base != base_instalacion:
+                raise ErrorGestor("El diario corresponde a otra ubicación.")
+            base_instalacion = base
+            fija = pendiente.get("ruta_fija") is True
+            if fija and base != BASE_FIJA:
+                raise ErrorGestor("El diario de ruta fija contiene una ubicación distinta.")
+        ubicacion = _FIJA if fija else _ubicacion_consulta(raiz, base_instalacion)
         if ubicacion.ubicable:
             _comprobar_ubicacion(raiz, ubicacion)
         if _capturar(raiz, ubicacion.diario) is None:

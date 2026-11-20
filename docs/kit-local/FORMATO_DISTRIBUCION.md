@@ -75,7 +75,7 @@ evidencia queden fuera de las rutas de código, pruebas y controles.
 | Documentación de producto, decisiones y backlog | Conserva sus fuentes vigentes, por ejemplo `docs/` y el gestor de incidencias. Reserva los patrones de `documentos` para el inventario mecánico con cabecera JSON. |
 | Contratos y sesiones tipificados | `sdd/registro/` para los registros, `sdd/operaciones/` para los recibos, `sdd/aprobaciones/` para las aprobaciones de arranque cuando correspondan y `sdd/indice.md` para el índice generado. |
 | Resultados y guardados | Conserva las referencias originales a CI e informes históricos. Para las sesiones gobernadas usa `sesiones/estado/` y los destinos acordados de evidencia, por defecto `sesiones/evidencias/`. |
-| Motor y documentación instalada | Según el modo de instalación. El mapa de modo ubicable asigna la raíz del kit. Las rutas de la aplicación y del registro se resuelven desde la raíz Git del consumidor. |
+| Motor y documentación instalada | El kit se instala en `gobernanza/kit-local` desde la raíz Git. Las rutas de la aplicación y del registro se resuelven desde la raíz Git del consumidor. |
 
 Revisa los destinos de la instalación y del registro por separado, incluidos
 archivos ignorados, enlaces y usos anteriores de las rutas SDD en Git. Si
@@ -89,9 +89,9 @@ la adopción a los pasos compatibles y deja asentado el impedimento.
 
 | Modalidad | Cuándo elegirla |
 |---|---|
-| Estándar | El plan puede usar `.gobernanza-kit/`, el puente Python `gobernanza/__init__.py` y `.agents/skills/gobernanza-local/SKILL.md`. |
-| Aislada | El proyecto ya tiene un paquete Python `gobernanza`. Usa el gestor bajo `.gobernanza-kit/` y la misma ruta de skill que el modo estándar. |
-| Ubicable | La instalación necesita una raíz distinta, por ejemplo si la ruta de skill ya tiene otro dueño. Declara una ruta relativa libre en `gobernanza/rutas-kit.json` para alojar allí el gestor, la skill y el paquete. |
+| Estándar | Usa el puente Python `gobernanza/__init__.py` y la skill de `gobernanza/kit-local`. |
+| Aislada | El proyecto ya tiene un paquete Python `gobernanza`. Opera con el gestor de la ruta fija en un proceso separado. |
+| Ubicable | Usa el gestor de la ruta fija con la variante que documenta los slots versionables del consumidor. |
 
 Los tres modos de la entrega actual comprueban también `./gobernanza-kit` y
 el bloque de `AGENTS.md`. Si el plan detecta contenido ajeno o una
@@ -107,7 +107,7 @@ diario vivo en el worktree como archivos operativos.
 
 Prepara `gobernanza/config.json` con las rutas y verificadores que correspondan
 al proyecto. Consulta el [formato de configuración](FORMATO_NUCLEO.md) y
-el mapa de modo ubicable de este manual. El verificador
+la sección de modalidades y ruta fija de este manual. El verificador
 integrado admite `unittest discover`. Las transiciones de ejecución y
 entrega del flujo general requieren informes del kit con casos ejecutados.
 Si el proyecto usa otro runner, conserva sus comprobaciones en CI o en
@@ -170,8 +170,8 @@ del consumidor apunta al corte, a la corrección integrada y a esa sesión.
 
 Tras extraer el ZIP, conserva juntos el lanzador `instalar.py`, `entrega.json`
 y las carpetas de paquete. Selecciona el mismo modo del consumidor durante
-una actualización. El modo ubicable requiere que el consumidor declare su
-raíz en `gobernanza/rutas-kit.json`.
+una actualización. Los tres modos instalan en `gobernanza/kit-local`, dentro
+de la raíz Git. El modo controla cómo se opera el kit.
 
 ```sh
 python3 -I instalar.py --raiz R planificar --accion instalar --modo aislado --salida PLAN.json
@@ -188,15 +188,15 @@ la configuración del hook para aplicar sus reglas.
 
 - Estándar. Usa un espacio Python conocido dentro del consumidor y la entrada
   `python3 -m gobernanza` desde su raíz Git.
-- Aislada. Usa la entrada `python3 -I .gobernanza-kit/gestionar.py operar` y
+- Aislada. Usa `python3 -I gobernanza/kit-local/gestionar.py operar` y
   mantiene su runtime separado del Python del proyecto.
-- Ubicable. Usa un directorio asignado por el consumidor y la entrada
-  `python3 -I RUTA/gestionar.py operar`. Declara la ruta en
-  `gobernanza/rutas-kit.json` antes de planear.
+- Ubicable. Usa el mismo administrador con el paquete cuya documentación
+  permite guardar el slot completo en Git.
 
-```json
-{"schema":1,"rutas":{"instalacion":"local/kit"}}
-```
+Una actualización reconoce la instalación anterior. Si vive en una ubicación
+histórica, el plan muestra el origen y las entradas que actualizará o retirará.
+Conserva la modalidad y los archivos propios del consumidor. El mapa histórico
+`gobernanza/rutas-kit.json` solo identifica una instalación anterior.
 
 ## Actualización, diario y recuperación
 

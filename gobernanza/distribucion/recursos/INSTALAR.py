@@ -132,13 +132,25 @@ def ejecutar(args):
 
     raiz = args.raiz.resolve(strict=True)
     ubicacion = gestor._CLASICA
+    origen = None
+    fija = (paquetes["paquete"] / gestor.CAPACIDAD_RUTA_FIJA).is_file()
     modo = getattr(args, "modo", None)
     if args.verbo == "aplicar":
         plan = json.loads((raiz / args.plan).read_bytes())
         if not isinstance(plan, dict):
             raise ValueError("El plan revisado debe ser un objeto JSON.")
         modo = plan.get("modo", "estandar")
-    if modo == "ubicable":
+    if fija:
+        from gobernanza.distribucion.ubicacion import origen as reconocer_origen
+
+        ubicacion = gestor._FIJA
+        pendiente = any(os.path.lexists(raiz / diario)
+                        for diario in (gestor.DIARIO, gestor.DIARIO_UBICABLE))
+        if args.verbo != "recuperar" or not pendiente:
+            origen, _ = reconocer_origen(raiz)
+            if modo is None and args.verbo in ("instalar", "actualizar", "planificar"):
+                _, _, _, modo = gestor._estado(raiz, origen)
+    elif modo == "ubicable":
         ubicacion, _ = gestor._mapa_ubicable(raiz)
     elif (modo is None and not os.path.lexists(raiz / gestor.DIARIO_UBICABLE)
           and not os.path.lexists(raiz / gestor.DIARIO)
@@ -147,8 +159,11 @@ def ejecutar(args):
         mapeada, _ = gestor._mapa_ubicable(raiz)
         if os.path.lexists(raiz / mapeada.activo):
             ubicacion = mapeada
-    paquete = paquetes["paquete-ubicable" if ubicacion.ubicable else "paquete"]
-    base = ubicacion.base if ubicacion.ubicable else None
+    variante_ubicable = modo == "ubicable" if fija else ubicacion.ubicable
+    paquete = paquetes["paquete-ubicable" if variante_ubicable else "paquete"]
+    base = ubicacion.base if ubicacion.ubicable and not fija else None
+    if fija and args.verbo in ("estado", "recuperar") and origen is not None and origen.ubicable:
+        base = origen.base
     argv = ["--raiz", str(raiz), args.verbo]
     directo = args.verbo in ("instalar", "actualizar")
     relevo = None
@@ -156,7 +171,7 @@ def ejecutar(args):
         accion = args.verbo if directo else args.accion
         migrar = False
         if accion == "actualizar":
-            _, slot, _, _ = gestor._estado(raiz, ubicacion)
+            _, slot, _, _ = gestor._estado(raiz, origen or ubicacion)
             migrar = bool(slot and not (slot / NAVEGACION[0]).exists() and (paquete / NAVEGACION[0]).is_file())
         cambios = dict(activar_hook_solucion=args.activar_hook_solucion,
                        reemplazar_anteriores=accion == "actualizar", migrar_navegacion=migrar)

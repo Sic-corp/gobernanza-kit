@@ -44,7 +44,7 @@ def _parser():
     v.add_argument("--paquete", required=True)
     v.add_argument("--accion", choices=["instalar", "actualizar"], default="instalar")
     v.add_argument("--modo", choices=["estandar", "aislado", "ubicable"],
-                   help="Modo inicial; ubicable lee gobernanza/rutas-kit.json")
+                   help="Modo de operación; las nuevas entregas comparten gobernanza/kit-local")
     v.add_argument("--migrar-navegacion", action="store_true",
                    help="Autorizar el cambio de entradas históricas al incorporar la guía")
     v.add_argument("--reemplazar-anteriores", action="store_true",
